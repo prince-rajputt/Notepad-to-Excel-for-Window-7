@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.spec
+logs/*.log*
+tests/manual/_e2e_workspace/
+*.db

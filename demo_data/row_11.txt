@@ -1,0 +1,2 @@
+यह पंक्ति अभी किसी श्रेणी से जुड़ी नहीं है <BITMAP>:\newsair\logo.psd</BITMAP>
+This line is not yet assigned to any category.
