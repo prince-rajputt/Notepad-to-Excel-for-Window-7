@@ -6,6 +6,7 @@ files: on every sync, News Data is fully rebuilt from the database, which
 itself only ever contains records for files that currently exist on disk
 (deleting a file hard-deletes its database record).
 """
+import difflib
 import logging
 import os
 import threading
@@ -18,6 +19,13 @@ from app.txt_reader import extract_hindi_message
 from app.utils import compute_file_hash, is_supported_file
 
 logger = logging.getLogger("word_to_excel_sync")
+
+LINE_PREVIEW_CHARS = 90
+
+
+def _preview(line):
+    line = line.strip()
+    return line if len(line) <= LINE_PREVIEW_CHARS else line[:LINE_PREVIEW_CHARS] + "…"
 
 
 class SyncEngine:
@@ -137,7 +145,27 @@ class SyncEngine:
             else:
                 self._notify(f"↻ {filename} modified")
                 self._notify(f"↻ {category} refreshed")
+                self._notify_line_diff(existing.content, content)
             return record
+
+    def _notify_line_diff(self, old_content, new_content):
+        """Emit one activity-log line per changed news line, so the user can see
+        exactly which line was added, removed, or edited - not just that the
+        file as a whole changed."""
+        old_lines = old_content.split("\n") if old_content else []
+        new_lines = new_content.split("\n") if new_content else []
+        matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag == "replace" and (i2 - i1) == (j2 - j1):
+                for old_line, new_line in zip(old_lines[i1:i2], new_lines[j1:j2]):
+                    self._notify(f"~ line edited: \"{_preview(old_line)}\" → \"{_preview(new_line)}\"")
+            else:
+                for old_line in old_lines[i1:i2]:
+                    self._notify(f"− line removed: \"{_preview(old_line)}\"")
+                for new_line in new_lines[j1:j2]:
+                    self._notify(f"+ line added: \"{_preview(new_line)}\"")
 
     def handle_created(self, full_path):
         record = self.process_file(full_path)

@@ -4,6 +4,7 @@ __pycache__/
 venv/
 build/
 dist/
+installer_output/
 *.spec
 logs/*.log*
 tests/manual/_e2e_workspace/

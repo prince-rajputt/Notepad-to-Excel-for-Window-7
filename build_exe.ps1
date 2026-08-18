@@ -19,7 +19,10 @@ python -m PyInstaller `
     --name "WordToExcelHindiSync" `
     --windowed `
     --onefile `
+    --noupx `
     --collect-all customtkinter `
+    --exclude-module PIL.AvifImagePlugin `
+    --exclude-module PIL._avif `
     main.py
 
 if ($LASTEXITCODE -ne 0) {

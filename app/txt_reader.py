@@ -1,17 +1,16 @@
-"""Read .txt files and extract Hindi (Devanagari) content, stripping
+"""Read .txt files and extract news content, stripping
 <BITMAP>...</BITMAP> image-placeholder tags first.
 
 The source files are plain Windows Notepad .txt exports where each line is
-either a news line (possibly followed by a <BITMAP>...</BITMAP> path
-placeholder that must never be treated as content) or plain English
-commentary that should be discarded.
+a news line (possibly followed by a <BITMAP>...</BITMAP> path placeholder
+that must never be treated as content). Both Hindi and English lines are
+kept; only lines left empty once the BITMAP tag is stripped are discarded.
 """
 import codecs
 import logging
 import re
 
 from app.errors import DocumentReadError
-from app.hindi_detector import contains_devanagari
 
 logger = logging.getLogger("word_to_excel_sync")
 
@@ -29,11 +28,11 @@ def remove_bitmap_tags(text):
 
 
 def clean_and_extract_hindi_lines(text):
-    """Remove BITMAP tags, then return the ordered list of cleaned lines that
-    contain at least one Devanagari character. English-only lines (and lines
-    that were nothing but a BITMAP placeholder) are dropped. The remaining
-    text is never translated, summarized, or reworded - only BITMAP removal
-    and whitespace cleanup are applied.
+    """Remove BITMAP tags, then return the ordered list of cleaned, non-empty
+    lines (Hindi and English both kept). Lines that were nothing but a BITMAP
+    placeholder (and become empty once it's removed) are dropped. The
+    remaining text is never translated, summarized, or reworded - only
+    BITMAP removal and whitespace cleanup are applied.
     """
     text_without_bitmap = remove_bitmap_tags(text)
     lines = text_without_bitmap.splitlines()
@@ -43,8 +42,7 @@ def clean_and_extract_hindi_lines(text):
         cleaned = WHITESPACE_RUN.sub(" ", line).strip()
         if not cleaned:
             continue
-        if contains_devanagari(cleaned):
-            result.append(cleaned)
+        result.append(cleaned)
     return result
 
 

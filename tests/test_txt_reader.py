@@ -38,9 +38,9 @@ class TestBitmapRemoval(unittest.TestCase):
         text = "भारत ने India को हराया <BITMAP>:\\newsair\\logo.psd</BITMAP>"
         self.assertEqual(clean_and_extract_hindi_lines(text), ["भारत ने India को हराया"])
 
-    def test_5_english_only_with_bitmap_ignored(self):
+    def test_5_english_only_with_bitmap_kept(self):
         text = "India won the match <BITMAP>:\\newsair\\logo.psd</BITMAP>"
-        self.assertEqual(clean_and_extract_hindi_lines(text), [])
+        self.assertEqual(clean_and_extract_hindi_lines(text), ["India won the match"])
 
     def test_6_multiple_lines_each_own_bitmap(self):
         text = "पहली खबर <BITMAP>a.psd</BITMAP>\nदूसरी खबर <BITMAP>b.psd</BITMAP>"
@@ -93,9 +93,13 @@ class TestFullExampleFromSpec(unittest.TestCase):
         )
         expected = [
             "राष्ट्रीय मंदिर के पास इलाके में भीषण आग",
+            "A major fire occurred near the temple.",
             "दर्शनार्थियों की भीड़ में अचानक मौत",
+            "The crowd suddenly faced a tragedy.",
             "7 श्रद्धालुओं की मौत, 12 से अधिक लोग घायल",
+            "Seven people died and many were injured.",
             "भारत ने India के साथ नई बातचीत शुरू की",
+            "India started a new discussion.",
         ]
         self.assertEqual(clean_and_extract_hindi_lines(text), expected)
 
@@ -146,6 +150,7 @@ class TestExtractFromFile(unittest.TestCase):
         lines = extract_hindi_lines(path)
         self.assertEqual(lines, [
             "राष्ट्रीय मंदिर के पास इलाके में भीषण आग",
+            "A major fire occurred near the temple.",
             "7 श्रद्धालुओं की मौत, 12 से अधिक लोग घायल",
         ])
 
@@ -153,10 +158,16 @@ class TestExtractFromFile(unittest.TestCase):
         path = self._write("row_01.txt", "पहली खबर <BITMAP>a.psd</BITMAP>\nदूसरी खबर <BITMAP>b.psd</BITMAP>\n")
         self.assertEqual(extract_hindi_message(path), "पहली खबर\nदूसरी खबर")
 
-    def test_english_only_file_returns_empty(self):
+    def test_english_only_file_kept(self):
         path = self._write("row_09.txt", "Today is an important news story.\nThe government made an announcement.\n")
-        self.assertEqual(extract_hindi_lines(path), [])
-        self.assertEqual(extract_hindi_message(path), "")
+        self.assertEqual(
+            extract_hindi_lines(path),
+            ["Today is an important news story.", "The government made an announcement."],
+        )
+        self.assertEqual(
+            extract_hindi_message(path),
+            "Today is an important news story.\nThe government made an announcement.",
+        )
 
     def test_missing_file_raises(self):
         with self.assertRaises(TxtReadError):

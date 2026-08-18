@@ -10,9 +10,14 @@ from app.logger import setup_logger
 
 def main():
     if getattr(sys, "frozen", False):
-        # Running as a PyInstaller EXE: keep config/logs next to the executable,
-        # not inside the temporary --onefile extraction directory.
-        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+        # Running as a PyInstaller EXE: keep config/logs in a per-user writable
+        # location, not next to the executable (which may sit in Program Files,
+        # read-only for standard users after a proper installer) and not inside
+        # the temporary --onefile extraction directory.
+        base_dir = os.path.join(
+            os.environ.get("APPDATA", os.path.expanduser("~")), "TxtNewsExcelSync"
+        )
+        os.makedirs(base_dir, exist_ok=True)
     else:
         base_dir = os.path.dirname(os.path.abspath(__file__))
     logger = setup_logger(base_dir)

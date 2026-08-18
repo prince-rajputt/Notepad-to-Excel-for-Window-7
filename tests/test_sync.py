@@ -71,6 +71,7 @@ class TestSyncEngine(unittest.TestCase):
         self.assertEqual(rows, [
             (0, "खबर India", None),
             (1, "खबर India", "आज देश में बड़ी खबर सामने आई है।"),
+            (1, "खबर India", "English only line."),
             (1, "खबर India", "सरकार ने नई घोषणा की है।"),
             (1, "खबर India", "भारत में लोगों ने प्रतिक्रिया दी है।"),
         ])
@@ -172,11 +173,15 @@ class TestSyncEngine(unittest.TestCase):
         all_records = self.db.get_all()
         self.assertEqual(len(all_records), 1)
 
-    def test_english_only_file_produces_placeholder_only(self):
+    def test_english_only_file_kept(self):
         self._write_txt("row_07.txt", "This is an English message.\nThis contains no Hindi.")
         self.engine.run_initial_scan()
         rows = self._news_data_rows()
-        self.assertEqual(rows, [(0, "Commentary Box", None)])
+        self.assertEqual(rows, [
+            (0, "Commentary Box", None),
+            (1, "Commentary Box", "This is an English message."),
+            (1, "Commentary Box", "This contains no Hindi."),
+        ])
 
     def test_mixed_hindi_english_line_kept_whole(self):
         self._write_txt("row_02.txt", "भारत ने India के साथ नई बातचीत शुरू की <BITMAP>a.psd</BITMAP>")

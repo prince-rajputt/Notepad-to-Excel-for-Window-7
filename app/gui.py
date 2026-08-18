@@ -4,6 +4,7 @@ import os
 import queue
 import sys
 import threading
+import time
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
@@ -17,6 +18,7 @@ logger = logging.getLogger("word_to_excel_sync")
 
 APP_TITLE = "TXT News → Excel Sync"
 REFRESH_MS = 2000
+LOG_AUTO_CLEAR_SECONDS = 2 * 60 * 60  # activity log view auto-clears every 2 hours (app runs 24/7)
 
 STARTUP_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_VALUE_NAME = "TxtNewsToExcelSync"
@@ -48,7 +50,7 @@ class App(ctk.CTk):
         super().__init__()
         self.config_obj = config
         self.title(APP_TITLE)
-        self.geometry("1050x820")
+        self.geometry("1050x960")
 
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
@@ -59,6 +61,7 @@ class App(ctk.CTk):
         self.watcher = FolderWatcher(self.engine)
 
         self._log_queue = queue.Queue()
+        self._log_cleared_at = time.monotonic()
         self._excel_retry_in_progress = False
         self._mapping_window = None
         self._mapping_entries = {}
@@ -153,7 +156,7 @@ class App(ctk.CTk):
         list_frame.pack(fill="both", expand=True, **pad)
         self._register_themed(list_frame)
         columns = ("row_no", "category", "file_name", "news_lines", "modified")
-        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=8)
+        self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=6)
         for col, label, width in (
             ("row_no", "Row No.", 70), ("category", "Category", 180),
             ("file_name", "File Name", 140), ("news_lines", "News Lines", 90),
@@ -169,9 +172,13 @@ class App(ctk.CTk):
 
         log_label = ctk.CTkLabel(self, text="ACTIVITY LOG", font=ctk.CTkFont(weight="bold"))
         log_label.pack(anchor="w", padx=10)
-        self.log_box = ctk.CTkTextbox(self, height=160)
-        self.log_box.pack(fill="both", expand=False, **pad)
+        self.log_box = ctk.CTkTextbox(self, height=340, font=ctk.CTkFont(family="Consolas", size=12))
+        self.log_box.pack(fill="both", expand=True, **pad)
         self.log_box.configure(state="disabled")
+        self.log_box.tag_config("added", foreground="#2ecc71")
+        self.log_box.tag_config("removed", foreground="#e74c3c")
+        self.log_box.tag_config("modified", foreground="#f39c12")
+        self.log_box.tag_config("info", foreground="#5dade2")
         self._register_themed(self.log_box)
         self._register_themed(self)
 
@@ -436,11 +443,24 @@ class App(ctk.CTk):
     # -- refresh loop --------------------------------------------------------
 
     def _periodic_refresh(self):
+        self._maybe_auto_clear_log()
         self._drain_log_queue()
         self._refresh_stats()
         self._refresh_file_list()
         self._retry_pending_excel()
         self.after(REFRESH_MS, self._periodic_refresh)
+
+    def _maybe_auto_clear_log(self):
+        """Clear the on-screen activity log every LOG_AUTO_CLEAR_SECONDS so it
+        stays readable during 24/7 use. The rotating file log (logs/app.log)
+        is untouched - this only resets what's shown in the GUI panel."""
+        if time.monotonic() - self._log_cleared_at < LOG_AUTO_CLEAR_SECONDS:
+            return
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+        self._log_cleared_at = time.monotonic()
+        self._log_queue.put(f"— Activity log auto-cleared at {now_str()} (refreshes every 2 hours) —")
 
     def _retry_pending_excel(self):
         """If a previous write failed because Excel had the file open, keep retrying
@@ -458,6 +478,16 @@ class App(ctk.CTk):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    @staticmethod
+    def _tag_for_message(message):
+        if message.startswith(("✓", "+")):
+            return "added"
+        if message.startswith(("✗", "−")):
+            return "removed"
+        if message.startswith(("↻", "~")):
+            return "modified"
+        return None
+
     def _drain_log_queue(self):
         drained = False
         self.log_box.configure(state="normal")
@@ -467,7 +497,7 @@ class App(ctk.CTk):
             except queue.Empty:
                 break
             timestamp = now_str().split(" ")[1]
-            self.log_box.insert("end", f"{timestamp} {message}\n")
+            self.log_box.insert("end", f"{timestamp} {message}\n", self._tag_for_message(message))
             drained = True
         self.log_box.configure(state="disabled")
         if drained:
