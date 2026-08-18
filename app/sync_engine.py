@@ -1,9 +1,10 @@
 """Ties together the scanner, database, txt reader and excel manager.
 
-This is the single place that implements the row_XX.txt create/modify/delete/
-recreate synchronization rules described in the specification. The row
-number parsed from a filename is the file's permanent identity: "modify" and
-"recreate" both boil down to the same upsert-by-row-number operation.
+The row number parsed from a filename is the file's permanent identity.
+The Excel workbook is a LIVE MIRROR of the currently-existing row_XX.txt
+files: on every sync, News Data is fully rebuilt from the database, which
+itself only ever contains records for files that currently exist on disk
+(deleting a file hard-deletes its database record).
 """
 import logging
 import os
@@ -11,7 +12,7 @@ import threading
 
 from app.errors import DocumentReadError
 from app.excel_manager import ExcelLockedError, generate_excel
-from app.row_mapping import category_for_row, parse_row_number
+from app.row_mapping import category_for_row, is_row_enabled, parse_row_number
 from app.scanner import get_file_stat, list_target_files
 from app.txt_reader import extract_hindi_message
 from app.utils import compute_file_hash, is_supported_file
@@ -66,6 +67,10 @@ class SyncEngine:
             logger.warning("Skipping non-row TXT file (expected row_XX.txt): %s", filename)
             return None
 
+        if not is_row_enabled(row_number, self.config):
+            logger.debug("Skipping disabled row %s (%s): not in row_categories", row_number, filename)
+            return None
+
         size, mtime = get_file_stat(full_path)
         if size is None:
             logger.warning("File disappeared before it could be processed: %s", full_path)
@@ -74,14 +79,20 @@ class SyncEngine:
         with self._lock:
             existing = self.db.get_by_row_number(row_number)
 
-            unchanged_active_file = (
+            unchanged = (
                 existing is not None
-                and existing.status == "Active"
                 and existing.full_path == full_path
                 and existing.size == size
                 and existing.mtime == mtime
             )
-            if unchanged_active_file:
+            if unchanged:
+                # Even when the file itself hasn't changed, the row_categories
+                # mapping in config.json may have - always re-sync the category
+                # so a config edit is never masked by this fast path.
+                current_category = category_for_row(row_number, self.config)
+                if existing.category != current_category:
+                    self.db.update_category(row_number, current_category)
+                    existing = self.db.get_by_row_number(row_number)
                 self.db.touch_last_synced(row_number)
                 return existing
 
@@ -93,7 +104,6 @@ class SyncEngine:
 
             content_unchanged = (
                 existing is not None
-                and existing.status == "Active"
                 and existing.full_path == full_path
                 and existing.file_hash == file_hash
             )
@@ -101,11 +111,10 @@ class SyncEngine:
 
             if content_unchanged:
                 # metadata changed (e.g. touched) but content identical - avoid reparsing
-                record = self.db.upsert_row(
+                return self.db.upsert_row(
                     row_number, category, filename, full_path,
                     existing.content, file_hash, size, mtime,
                 )
-                return record
 
             try:
                 content = extract_hindi_message(full_path)
@@ -114,18 +123,20 @@ class SyncEngine:
                 return None
 
             was_new = existing is None
-            was_deleted = existing is not None and existing.status == "Deleted"
+            news_count = len(content.split("\n")) if content else 0
 
             record = self.db.upsert_row(
                 row_number, category, filename, full_path, content, file_hash, size, mtime
             )
 
             if was_new:
-                self._notify(f"+ {filename} added")
-            elif was_deleted:
-                self._notify(f"↻ {filename} recreated")
+                self._notify(f"✓ {filename} detected")
+                self._notify(f"✓ {category} processed")
+                self._notify(f"✓ {news_count} Hindi news items extracted")
+                self._notify("✓ BITMAP tags removed")
             else:
                 self._notify(f"↻ {filename} modified")
+                self._notify(f"↻ {category} refreshed")
             return record
 
     def handle_created(self, full_path):
@@ -144,9 +155,10 @@ class SyncEngine:
         if row_number is not None:
             with self._lock:
                 existing = self.db.get_by_row_number(row_number)
-                if existing and existing.status == "Active":
-                    self.db.mark_deleted(row_number)
+                if existing:
+                    self.db.delete_row(row_number)
                     self._notify(f"✗ {filename} deleted")
+                    self._notify(f"✗ {existing.category} news removed from current Excel")
         self.regenerate_excel()
 
     def handle_moved(self, src_path, dest_path):
@@ -160,9 +172,9 @@ class SyncEngine:
     # -- full scan / reconciliation -----------------------------------------------
 
     def run_full_scan(self, reason="scan"):
-        """Scan the root folder, sync every row_XX.txt file, and mark vanished
-        rows as Deleted. Used for both the initial scan on startup and the
-        manual "SYNC NOW" / reconciliation flow - the logic is identical.
+        """Scan the root folder, sync every row_XX.txt file, and remove records for
+        rows whose file has vanished. Used for both the initial scan on startup and
+        the manual "SYNC NOW" / reconciliation flow - the logic is identical.
         """
         self._notify(f"{reason} started")
         current_paths = list_target_files(self.txt_root, self.watch_extensions)
@@ -170,18 +182,22 @@ class SyncEngine:
         current_row_numbers = set()
         for path in current_paths:
             row_number = parse_row_number(os.path.basename(path))
-            if row_number is not None:
+            if row_number is not None and is_row_enabled(row_number, self.config):
                 current_row_numbers.add(row_number)
             self.process_file(path)
 
         with self._lock:
-            active_row_numbers = self.db.get_active_row_numbers()
-            missing_row_numbers = active_row_numbers - current_row_numbers
+            # Anything tracked that is no longer both present-on-disk AND enabled
+            # (file deleted, or its row was removed from the mapping) is purged -
+            # Excel must never show a row number outside the current whitelist.
+            tracked_row_numbers = self.db.get_all_row_numbers()
+            missing_row_numbers = tracked_row_numbers - current_row_numbers
             for row_number in missing_row_numbers:
                 existing = self.db.get_by_row_number(row_number)
                 if existing:
-                    self.db.mark_deleted(row_number)
+                    self.db.delete_row(row_number)
                     self._notify(f"✗ {existing.file_name} deleted")
+                    self._notify(f"✗ {existing.category} news removed from current Excel")
 
         self.regenerate_excel()
         self._notify(f"{reason} completed")
@@ -208,7 +224,7 @@ class SyncEngine:
         was_pending = self.excel_pending
         records = self.db.get_all()
         try:
-            generate_excel(records, self.excel_file)
+            generate_excel(records, self.excel_file, self.config.row_categories)
             self.excel_pending = False
             if was_pending:
                 self._notify("✓ Excel synchronized (file was unlocked)")

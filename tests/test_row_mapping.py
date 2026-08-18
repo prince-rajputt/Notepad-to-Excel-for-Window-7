@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.config import Config
-from app.row_mapping import DEFAULT_ROW_CATEGORIES, category_for_row, parse_row_number
+from app.row_mapping import DEFAULT_ROW_CATEGORIES, category_for_row, is_row_enabled, parse_row_number
 
 
 class TestParseRowNumber(unittest.TestCase):
@@ -42,10 +42,8 @@ class TestCategoryForRow(unittest.TestCase):
 
     def test_default_mapping_matches_spec(self):
         expected = {
-            1: "Top News", 2: "National", 3: "Bengal", 4: "Breaking News",
-            5: "Khabar Bihar", 6: "Khabar Jharkhand", 7: "Commentary Box",
-            8: "Entertainment Ticket", 9: "Full Screen Breaking",
-            10: "Upper Band", 11: "Unassigned",
+            2: "खबर India", 3: "खबर बंगाल", 5: "खबर बिहार", 6: "खबर झारखंड",
+            7: "Commentary Box", 8: "Entertainment", 11: "Advertisement",
         }
         for row_number, category in expected.items():
             self.assertEqual(category_for_row(row_number, self.config), category)
@@ -59,8 +57,28 @@ class TestCategoryForRow(unittest.TestCase):
         self.assertEqual(category_for_row(11, self.config), "Custom Category")
 
     def test_default_row_categories_immutable_from_config_mutation(self):
-        self.config.set_category(1, "Changed")
-        self.assertEqual(DEFAULT_ROW_CATEGORIES["1"], "Top News")
+        self.config.set_category(2, "Changed")
+        self.assertEqual(DEFAULT_ROW_CATEGORIES["2"], "खबर India")
+
+
+class TestIsRowEnabled(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp(prefix="row_enabled_test_")
+        self.config = Config(os.path.join(self.tmp_dir, "config.json"))
+
+    def test_default_enabled_rows_only_the_seven_configured(self):
+        for row_number in (2, 3, 5, 6, 7, 8, 11):
+            self.assertTrue(is_row_enabled(row_number, self.config))
+
+    def test_rows_not_in_mapping_are_disabled_by_default(self):
+        for row_number in (1, 4, 9, 10):
+            self.assertFalse(is_row_enabled(row_number, self.config))
+
+    def test_adding_a_row_enables_it(self):
+        self.assertFalse(is_row_enabled(1, self.config))
+        self.config.set_category(1, "Top News")
+        self.config.save()
+        self.assertTrue(is_row_enabled(1, self.config))
 
 
 if __name__ == "__main__":

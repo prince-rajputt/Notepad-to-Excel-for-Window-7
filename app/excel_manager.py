@@ -1,98 +1,118 @@
-"""Generate and update the single All_Content.xlsx workbook from the database."""
+"""Generate and update the single All_Content.xlsx workbook from the database.
+
+The workbook is a LIVE MIRROR of the currently-existing row_XX.txt files:
+it is fully regenerated from the database on every sync, not incrementally
+patched, so deleted files' news disappears and nothing stale lingers.
+"""
 import logging
 import os
 import tempfile
 import time
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-
-from app.models import STATUS_ACTIVE, STATUS_DELETED
-from app.utils import now_str
 
 logger = logging.getLogger("word_to_excel_sync")
 
-HEADERS = [
-    "Serial No.", "Category", "File Name", "Hindi Message", "Created At",
-    "Modified At", "Deleted At", "Status", "Last Synced At",
-]
+NEWS_DATA_HEADERS = ["Visibility", "Category", "News Data"]
+NEWS_DATA_COLUMN_WIDTHS = {"A": 13, "B": 28, "C": 90}
 
-COLUMN_WIDTHS = {
-    "A": 12, "B": 25, "C": 18, "D": 80, "E": 22, "F": 22, "G": 22, "H": 15, "I": 22,
-}
+NEWS_CATEGORY_HEADERS = ["Row No.", "Category"]
+NEWS_CATEGORY_COLUMN_WIDTHS = {"A": 12, "B": 30}
+
+HEADER_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+UNICODE_FONT_NAME = "Nirmala UI"
+WRAP_LENGTH_THRESHOLD = 100
 
 
 class ExcelLockedError(Exception):
     """Raised when All_Content.xlsx cannot be written because it is locked/open."""
 
 
-def _build_workbook(records):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Content"
-
-    header_font = Font(bold=True)
+def _style_header_row(ws, headers):
+    header_font = Font(bold=True, name=UNICODE_FONT_NAME)
     header_align = Alignment(horizontal="center", vertical="center")
-    for col_idx, header in enumerate(HEADERS, start=1):
+    for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
+        cell.fill = HEADER_FILL
         cell.alignment = header_align
 
-    wrap_top = Alignment(wrap_text=True, vertical="top")
+
+def _build_news_data_sheet(wb, records):
+    ws = wb.active
+    ws.title = "News Data"
+    _style_header_row(ws, NEWS_DATA_HEADERS)
+
+    body_font = Font(name=UNICODE_FONT_NAME)
     top_align = Alignment(vertical="top")
 
-    for row_idx, rec in enumerate(records, start=2):
-        ws.cell(row=row_idx, column=1, value=rec.serial_number).alignment = top_align
-        ws.cell(row=row_idx, column=2, value=rec.category).alignment = top_align
-        ws.cell(row=row_idx, column=3, value=rec.file_name).alignment = top_align
-        hindi_cell = ws.cell(row=row_idx, column=4, value=rec.content or "")
-        hindi_cell.alignment = wrap_top
-        ws.cell(row=row_idx, column=5, value=rec.created_at).alignment = top_align
-        ws.cell(row=row_idx, column=6, value=rec.modified_at).alignment = top_align
-        ws.cell(row=row_idx, column=7, value=rec.deleted_at or "").alignment = top_align
-        ws.cell(row=row_idx, column=8, value=rec.status).alignment = top_align
-        ws.cell(row=row_idx, column=9, value=rec.last_synced_at or "").alignment = top_align
+    row_idx = 2
+    # Pass 1: one placeholder row (Visibility=0) per currently-active category,
+    # in row-number order - all placeholders together, before any news rows.
+    for rec in records:
+        ws.cell(row=row_idx, column=1, value=0).font = body_font
+        ws.cell(row=row_idx, column=1).alignment = top_align
+        ws.cell(row=row_idx, column=2, value=rec.category).font = body_font
+        ws.cell(row=row_idx, column=2).alignment = top_align
+        ws.cell(row=row_idx, column=3, value="").font = body_font
+        ws.cell(row=row_idx, column=3).alignment = top_align
+        row_idx += 1
 
-    for col_letter, width in COLUMN_WIDTHS.items():
+    # Pass 2: one row per Hindi news line, grouped by category in row-number order.
+    for rec in records:
+        for line in rec.news_lines:
+            ws.cell(row=row_idx, column=1, value=1).font = body_font
+            ws.cell(row=row_idx, column=1).alignment = top_align
+            ws.cell(row=row_idx, column=2, value=rec.category).font = body_font
+            ws.cell(row=row_idx, column=2).alignment = top_align
+            news_cell = ws.cell(row=row_idx, column=3, value=line)
+            news_cell.font = body_font
+            wrap = len(line) > WRAP_LENGTH_THRESHOLD
+            news_cell.alignment = Alignment(vertical="top", wrap_text=wrap)
+            row_idx += 1
+
+    for col_letter, width in NEWS_DATA_COLUMN_WIDTHS.items():
         ws.column_dimensions[col_letter].width = width
 
-    last_row = max(len(records) + 1, 1)
-    last_col = get_column_letter(len(HEADERS))
+    last_row = max(row_idx - 1, 1)
+    last_col = get_column_letter(len(NEWS_DATA_HEADERS))
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{last_col}{last_row}"
+    return ws
 
-    _build_summary_sheet(wb, records)
+
+def _build_news_category_sheet(wb, row_categories):
+    ws = wb.create_sheet("News Category")
+    _style_header_row(ws, NEWS_CATEGORY_HEADERS)
+
+    body_font = Font(name=UNICODE_FONT_NAME)
+    for row_idx, row_number in enumerate(sorted((int(k) for k in row_categories.keys())), start=2):
+        ws.cell(row=row_idx, column=1, value=row_number).font = body_font
+        ws.cell(row=row_idx, column=2, value=row_categories[str(row_number)]).font = body_font
+
+    for col_letter, width in NEWS_CATEGORY_COLUMN_WIDTHS.items():
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def _build_workbook(records, row_categories):
+    wb = Workbook()
+    _build_news_data_sheet(wb, records)
+    _build_news_category_sheet(wb, row_categories)
     return wb
 
 
-def _build_summary_sheet(wb, records):
-    ws = wb.create_sheet("Summary")
-    total = len(records)
-    active = sum(1 for r in records if r.status == STATUS_ACTIVE)
-    deleted = sum(1 for r in records if r.status == STATUS_DELETED)
-
-    rows = [
-        ("Total Word Files", total),
-        ("Active Files", active),
-        ("Deleted Files", deleted),
-        ("Last Sync", now_str()),
-    ]
-    for row_idx, (label, value) in enumerate(rows, start=1):
-        ws.cell(row=row_idx, column=1, value=label).font = Font(bold=True)
-        ws.cell(row=row_idx, column=2, value=value)
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 22
-
-
-def generate_excel(records, excel_path, attempts=3, base_delay=1.0):
+def generate_excel(records, excel_path, row_categories, attempts=3, base_delay=1.0):
     """Write records to excel_path using safe temp-file replacement, retrying on lock errors.
 
     Raises ExcelLockedError if the file is still locked after all attempts.
     Never leaves a corrupt/partial file at excel_path.
     """
     os.makedirs(os.path.dirname(os.path.abspath(excel_path)), exist_ok=True)
-    wb = _build_workbook(records)
+    wb = _build_workbook(records, row_categories)
 
     fd, tmp_path = tempfile.mkstemp(
         suffix=".xlsx", prefix=".~tmp_", dir=os.path.dirname(os.path.abspath(excel_path))

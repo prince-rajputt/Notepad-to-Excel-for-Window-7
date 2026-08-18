@@ -9,18 +9,19 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 
 from app.database import Database
-from app.models import STATUS_ACTIVE, STATUS_DELETED
 from app.sync_engine import SyncEngine
 from app.utils import now_str
 from app.watcher import FolderWatcher
 
 logger = logging.getLogger("word_to_excel_sync")
 
-APP_TITLE = "TXT Row to Excel Sync"
+APP_TITLE = "TXT News → Excel Sync"
 REFRESH_MS = 2000
 
 STARTUP_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-STARTUP_VALUE_NAME = "TxtRowToExcelSync"
+STARTUP_VALUE_NAME = "TxtNewsToExcelSync"
+
+NIGHT_MODE_COLOR = "#000000"
 
 
 def _set_windows_startup(enabled, exe_path):
@@ -61,8 +62,11 @@ class App(ctk.CTk):
         self._excel_retry_in_progress = False
         self._mapping_window = None
         self._mapping_entries = {}
+        self._themed_widgets = []  # (widget, original_fg_color) pairs, for light/night toggling
 
         self._build_ui()
+        self._dark_mode = bool(self.config_obj.get("dark_mode", False))
+        self._apply_theme(self._dark_mode)
         self._start_initial_scan_async()
         self.after(REFRESH_MS, self._periodic_refresh)
 
@@ -73,11 +77,21 @@ class App(ctk.CTk):
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
 
-        header = ctk.CTkLabel(self, text="TXT ROW TO EXCEL SYNC", font=ctk.CTkFont(size=20, weight="bold"))
+        header = ctk.CTkFrame(self)
         header.pack(fill="x", **pad)
+        self._register_themed(header)
+
+        ctk.CTkLabel(header, text="TXT NEWS → EXCEL SYNC", font=ctk.CTkFont(size=20, weight="bold")).pack(
+            side="left", padx=10, pady=8
+        )
+        self.theme_toggle_btn = ctk.CTkButton(
+            header, text="☀", width=36, command=self._toggle_theme,
+        )
+        self.theme_toggle_btn.pack(side="right", padx=10, pady=8)
 
         paths_frame = ctk.CTkFrame(self)
         paths_frame.pack(fill="x", **pad)
+        self._register_themed(paths_frame)
 
         ctk.CTkLabel(paths_frame, text="TXT Folder:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.txt_folder_var = ctk.StringVar(value=self.config_obj.txt_root)
@@ -97,6 +111,7 @@ class App(ctk.CTk):
 
         status_frame = ctk.CTkFrame(self)
         status_frame.pack(fill="x", **pad)
+        self._register_themed(status_frame)
 
         self.status_label = ctk.CTkLabel(status_frame, text="● STOPPED", text_color="red",
                                           font=ctk.CTkFont(size=14, weight="bold"))
@@ -107,17 +122,18 @@ class App(ctk.CTk):
 
         stats_frame = ctk.CTkFrame(self)
         stats_frame.pack(fill="x", **pad)
-        self.stat_total = ctk.CTkLabel(stats_frame, text="Total Files: 0")
-        self.stat_active = ctk.CTkLabel(stats_frame, text="Active: 0")
-        self.stat_deleted = ctk.CTkLabel(stats_frame, text="Deleted: 0")
-        self.stat_lines = ctk.CTkLabel(stats_frame, text="Hindi Lines: 0")
-        for w in (self.stat_total, self.stat_active, self.stat_deleted, self.stat_lines):
+        self._register_themed(stats_frame)
+        self.stat_total = ctk.CTkLabel(stats_frame, text="Current TXT Files: 0")
+        self.stat_news_items = ctk.CTkLabel(stats_frame, text="Current News Items: 0")
+        self.stat_categories = ctk.CTkLabel(stats_frame, text="Active Categories: 0")
+        for w in (self.stat_total, self.stat_news_items, self.stat_categories):
             w.pack(side="left", padx=15, pady=8)
 
         buttons_frame = ctk.CTkFrame(self)
         buttons_frame.pack(fill="x", **pad)
-        ctk.CTkButton(buttons_frame, text="START SYNC", command=self._start_sync).pack(side="left", padx=5, pady=8)
-        ctk.CTkButton(buttons_frame, text="STOP SYNC", command=self._stop_sync).pack(side="left", padx=5, pady=8)
+        self._register_themed(buttons_frame)
+        ctk.CTkButton(buttons_frame, text="START MONITORING", command=self._start_sync).pack(side="left", padx=5, pady=8)
+        ctk.CTkButton(buttons_frame, text="STOP MONITORING", command=self._stop_sync).pack(side="left", padx=5, pady=8)
         ctk.CTkButton(buttons_frame, text="SYNC NOW", command=self._sync_now).pack(side="left", padx=5, pady=8)
         ctk.CTkButton(buttons_frame, text="OPEN EXCEL", command=self._open_excel).pack(side="left", padx=5, pady=8)
         ctk.CTkButton(buttons_frame, text="OPEN TXT FOLDER", command=self._open_txt_folder).pack(side="left", padx=5, pady=8)
@@ -127,25 +143,20 @@ class App(ctk.CTk):
 
         search_frame = ctk.CTkFrame(self)
         search_frame.pack(fill="x", **pad)
+        self._register_themed(search_frame)
         ctk.CTkLabel(search_frame, text="Search:").pack(side="left", padx=5)
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._refresh_file_list())
         ctk.CTkEntry(search_frame, textvariable=self.search_var, width=200).pack(side="left", padx=5)
 
-        ctk.CTkLabel(search_frame, text="Status:").pack(side="left", padx=(20, 5))
-        self.filter_var = ctk.StringVar(value="All")
-        ctk.CTkOptionMenu(
-            search_frame, values=["All", "Active", "Deleted"], variable=self.filter_var,
-            command=lambda _v: self._refresh_file_list(),
-        ).pack(side="left", padx=5)
-
         list_frame = ctk.CTkFrame(self)
         list_frame.pack(fill="both", expand=True, **pad)
-        columns = ("serial", "category", "file_name", "status", "modified")
+        self._register_themed(list_frame)
+        columns = ("row_no", "category", "file_name", "news_lines", "modified")
         self.tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=8)
         for col, label, width in (
-            ("serial", "Serial No.", 80), ("category", "Category", 180),
-            ("file_name", "File Name", 140), ("status", "Status", 90),
+            ("row_no", "Row No.", 70), ("category", "Category", 180),
+            ("file_name", "File Name", 140), ("news_lines", "News Lines", 90),
             ("modified", "Modified At", 180),
         ):
             self.tree.heading(col, text=label)
@@ -161,6 +172,45 @@ class App(ctk.CTk):
         self.log_box = ctk.CTkTextbox(self, height=160)
         self.log_box.pack(fill="both", expand=False, **pad)
         self.log_box.configure(state="disabled")
+        self._register_themed(self.log_box)
+        self._register_themed(self)
+
+    # -- Day / Night theme -----------------------------------------------------
+
+    def _register_themed(self, widget):
+        """Remember a widget's original (light-mode) fg_color so night mode can
+        override it to pure black and day mode can restore it exactly."""
+        self._themed_widgets.append((widget, widget.cget("fg_color")))
+
+    def _apply_theme(self, dark):
+        ctk.set_appearance_mode("Dark" if dark else "Light")
+
+        for widget, original_fg_color in self._themed_widgets:
+            widget.configure(fg_color=NIGHT_MODE_COLOR if dark else original_fg_color)
+
+        style = ttk.Style()
+        style.theme_use("default")
+        if dark:
+            style.configure(
+                "Treeview", background=NIGHT_MODE_COLOR, fieldbackground=NIGHT_MODE_COLOR,
+                foreground="white", borderwidth=0,
+            )
+            style.configure("Treeview.Heading", background="#1a1a1a", foreground="white")
+            style.map("Treeview", background=[("selected", "#333333")], foreground=[("selected", "white")])
+        else:
+            style.configure(
+                "Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0,
+            )
+            style.configure("Treeview.Heading", background="#f0f0f0", foreground="black")
+            style.map("Treeview", background=[("selected", "#0078D7")], foreground=[("selected", "white")])
+
+        self.theme_toggle_btn.configure(text="🌙" if dark else "☀")
+
+    def _toggle_theme(self):
+        self._dark_mode = not self._dark_mode
+        self._apply_theme(self._dark_mode)
+        self.config_obj.set("dark_mode", self._dark_mode)
+        self.config_obj.save()
 
     # -- Row/Category mapping editor -----------------------------------------
 
@@ -365,10 +415,10 @@ class App(ctk.CTk):
         selection = self.tree.selection()
         if not selection:
             return
-        serial = self.tree.item(selection[0], "values")[0]
+        row_no = self.tree.item(selection[0], "values")[0]
         records = self.db.get_all()
         for rec in records:
-            if str(rec.serial_number) == str(serial):
+            if str(rec.row_number) == str(row_no):
                 if os.path.exists(rec.full_path):
                     os.startfile(rec.full_path)  # noqa: S606
                 else:
@@ -426,27 +476,23 @@ class App(ctk.CTk):
 
     def _refresh_stats(self):
         stats = self.db.stats()
-        records = self.db.get_all(status=STATUS_ACTIVE)
-        hindi_lines = sum(len(r.content.splitlines()) for r in records if r.content)
-        self.stat_total.configure(text=f"Total Files: {stats['total']}")
-        self.stat_active.configure(text=f"Active: {stats['active']}")
-        self.stat_deleted.configure(text=f"Deleted: {stats['deleted']}")
-        self.stat_lines.configure(text=f"Hindi Lines: {hindi_lines}")
+        self.stat_total.configure(text=f"Current TXT Files: {stats['total_files']}")
+        self.stat_news_items.configure(text=f"Current News Items: {stats['news_items']}")
+        self.stat_categories.configure(text=f"Active Categories: {stats['active_categories']}")
 
     def _refresh_file_list(self):
         query = self.search_var.get().strip()
-        status = self.filter_var.get()
-        records = self.db.search(query, status=status) if query else self.db.get_all(status=status)
+        records = self.db.search(query) if query else self.db.get_all()
 
-        selected_serials = {self.tree.item(i, "values")[0] for i in self.tree.selection()}
+        selected_rows = {self.tree.item(i, "values")[0] for i in self.tree.selection()}
         for item in self.tree.get_children():
             self.tree.delete(item)
         for rec in records:
             item_id = self.tree.insert(
                 "", "end",
-                values=(rec.serial_number, rec.category, rec.file_name, rec.status, rec.modified_at),
+                values=(rec.row_number, rec.category, rec.file_name, len(rec.news_lines), rec.modified_at),
             )
-            if str(rec.serial_number) in selected_serials:
+            if str(rec.row_number) in selected_rows:
                 self.tree.selection_add(item_id)
 
 

@@ -1,9 +1,11 @@
-"""Data model for a tracked row_XX.txt file record."""
+"""Data model for a tracked row_XX.txt file record.
+
+There is no soft-delete/Status concept here: a record's existence in the
+database IS its existence in the monitored folder (the Excel output is a
+live mirror of the current folder, not a history).
+"""
 from dataclasses import dataclass
 from typing import Optional
-
-STATUS_ACTIVE = "Active"
-STATUS_DELETED = "Deleted"
 
 
 @dataclass
@@ -19,14 +21,12 @@ class FileRecord:
     mtime: float
     created_at: str
     modified_at: str
-    deleted_at: Optional[str]
-    status: str
     last_synced_at: str
 
     @property
-    def serial_number(self):
-        """The row number IS the permanent, user-facing Excel serial number."""
-        return self.row_number
+    def news_lines(self):
+        """The individual Hindi news lines extracted from this file, in order."""
+        return self.content.split("\n") if self.content else []
 
     @classmethod
     def from_row(cls, row):
@@ -42,7 +42,5 @@ class FileRecord:
             mtime=row["mtime"],
             created_at=row["created_at"],
             modified_at=row["modified_at"],
-            deleted_at=row["deleted_at"],
-            status=row["status"],
             last_synced_at=row["last_synced_at"],
         )

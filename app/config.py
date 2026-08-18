@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "keep_deleted_records": True,
     "auto_start": False,
     "mapping_password": "2001",
+    "dark_mode": False,
     "row_categories": dict(DEFAULT_ROW_CATEGORIES),
 }
 

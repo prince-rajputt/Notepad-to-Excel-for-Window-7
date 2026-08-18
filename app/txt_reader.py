@@ -48,6 +48,11 @@ def clean_and_extract_hindi_lines(text):
     return result
 
 
+# Spec-named alias: identical behavior, different name for callers that
+# think of the output as "news lines" rather than generic "Hindi lines".
+clean_and_extract_news_lines = clean_and_extract_hindi_lines
+
+
 def _looks_like_utf16_without_bom(raw_bytes):
     """Heuristic: UTF-16 text with mostly-ASCII content has a null byte in
     roughly every other position. Without this guard, blindly attempting a
