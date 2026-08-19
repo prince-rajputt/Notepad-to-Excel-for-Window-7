@@ -1,0 +1,22 @@
+# Pinned dependency set for the Windows 7 SP1 64-bit build.
+#
+# Built and installed with Python 3.8.10 (the last CPython release with
+# official Windows 7 support - Python 3.9+ requires Windows 8+ and pulls in
+# api-ms-win-core-* API-set stubs that do not exist on Windows 7).
+#
+# Install into venv-win7 with:
+#   venv-win7\Scripts\python.exe -m pip install -r requirements-win7.txt
+#
+# Do NOT bump these versions casually - each one was chosen because it still
+# ships a cp38-win_amd64 wheel and has no runtime dependency on a Windows
+# version newer than 7 SP1. Re-verify Windows 7 compatibility before
+# upgrading any of them.
+
+watchdog==4.0.2
+openpyxl==3.1.5
+customtkinter==5.2.2
+darkdetect==0.8.0
+packaging==24.1
+
+# Build tool only - not part of the running application.
+pyinstaller==5.13.2

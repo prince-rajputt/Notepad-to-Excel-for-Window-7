@@ -81,3 +81,8 @@ class Config:
 
     def set_category(self, row_number, category_name):
         self.row_categories[str(row_number)] = category_name
+
+    def remove_category(self, row_number):
+        """Drop row_number from the whitelist entirely - the corresponding
+        row_XX.txt is then no longer tracked at all (matches is_row_enabled())."""
+        self.row_categories.pop(str(row_number), None)

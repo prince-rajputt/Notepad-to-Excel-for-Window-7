@@ -290,6 +290,8 @@ class App(ctk.CTk):
         scroll.pack(fill="both", expand=True, padx=10, pady=5)
 
         self._mapping_entries = {}
+        self._mapping_row_frames = {}
+        self._mapping_deleted_rows = set()
         self._mapping_scroll_frame = scroll
         row_categories = self.config_obj.row_categories
         for row_number in sorted((int(k) for k in row_categories.keys())):
@@ -314,6 +316,7 @@ class App(ctk.CTk):
             if row_number in self._mapping_entries:
                 messagebox.showerror(APP_TITLE, f"Row {row_number} already exists.")
                 return
+            self._mapping_deleted_rows.discard(row_number)
             self._add_mapping_row(row_number, new_cat_var.get().strip() or "Unassigned")
             new_row_var.set("")
             new_cat_var.set("")
@@ -330,14 +333,41 @@ class App(ctk.CTk):
         row_frame.pack(fill="x", pady=2)
         ctk.CTkLabel(row_frame, text=f"Row {row_number:02d} \u2192", width=90).pack(side="left", padx=5)
         var = ctk.StringVar(value=category_name)
-        ctk.CTkEntry(row_frame, textvariable=var, width=260).pack(side="left", padx=5)
+        ctk.CTkEntry(row_frame, textvariable=var, width=210).pack(side="left", padx=5)
+        ctk.CTkButton(
+            row_frame, text="Delete", width=60, fg_color="#c0392b", hover_color="#922b21",
+            command=lambda: self._delete_mapping_row(row_number),
+        ).pack(side="left", padx=5)
         self._mapping_entries[row_number] = var
+        self._mapping_row_frames[row_number] = row_frame
+
+    def _delete_mapping_row(self, row_number):
+        if not messagebox.askyesno(
+            APP_TITLE,
+            f"Delete Row {row_number:02d}?\n\n"
+            "This will remove it from the mapping and, once saved, remove its "
+            "news from the current Excel file too.",
+        ):
+            return
+        self._mapping_row_frames.pop(row_number).destroy()
+        self._mapping_entries.pop(row_number, None)
+        self._mapping_deleted_rows.add(row_number)
 
     def _save_mapping(self):
         for row_number, var in self._mapping_entries.items():
             self.config_obj.set_category(row_number, var.get().strip() or "Unassigned")
+        for row_number in self._mapping_deleted_rows:
+            self.config_obj.remove_category(row_number)
         self.config_obj.save()
-        threading.Thread(target=self.engine.refresh_categories, daemon=True).start()
+
+        if self._mapping_deleted_rows:
+            # A full reconciliation purges DB/Excel rows for numbers no longer
+            # in the whitelist - refresh_categories() alone only renames
+            # existing rows, it never removes them.
+            threading.Thread(target=self.engine.run_reconciliation, daemon=True).start()
+        else:
+            threading.Thread(target=self.engine.refresh_categories, daemon=True).start()
+        self._mapping_deleted_rows = set()
         messagebox.showinfo(APP_TITLE, "Mapping saved. Excel is being updated.")
 
     # -- actions -----------------------------------------------------------
@@ -404,17 +434,28 @@ class App(ctk.CTk):
     def _sync_now(self):
         threading.Thread(target=self.engine.run_reconciliation, daemon=True).start()
 
+    def _startfile(self, path):
+        """os.startfile() wrapped so a failure is surfaced to the user instead
+        of vanishing silently - the --windowed build has no console, so an
+        unhandled exception here would otherwise just make the button appear
+        to do nothing."""
+        try:
+            os.startfile(path)  # noqa: S606 - user-initiated open of their own file
+        except OSError as exc:
+            logger.error("Failed to open %s: %s", path, exc)
+            messagebox.showerror(APP_TITLE, f"Could not open:\n{path}\n\n{exc}")
+
     def _open_excel(self):
         path = self.config_obj.excel_file
         if os.path.exists(path):
-            os.startfile(path)  # noqa: S606 - user-initiated open of their own file
+            self._startfile(path)
         else:
             messagebox.showinfo(APP_TITLE, "Excel file has not been generated yet.")
 
     def _open_txt_folder(self):
         path = self.config_obj.txt_root
         if os.path.isdir(path):
-            os.startfile(path)  # noqa: S606
+            self._startfile(path)
         else:
             messagebox.showinfo(APP_TITLE, "TXT folder does not exist.")
 
@@ -427,7 +468,7 @@ class App(ctk.CTk):
         for rec in records:
             if str(rec.row_number) == str(row_no):
                 if os.path.exists(rec.full_path):
-                    os.startfile(rec.full_path)  # noqa: S606
+                    self._startfile(rec.full_path)
                 else:
                     messagebox.showinfo(APP_TITLE, "The TXT file no longer exists on disk.")
                 break
