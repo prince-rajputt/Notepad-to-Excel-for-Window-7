@@ -1,92 +1,112 @@
+"""SQLite cache keyed by feed key."""
 import os
+import shutil
 import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import Database
 
 
 class TestDatabase(unittest.TestCase):
     def setUp(self):
-        self.tmp_dir = tempfile.mkdtemp(prefix="db_test_")
-        self.db_path = os.path.join(self.tmp_dir, "sync.db")
-        self.db = Database(self.db_path)
+        self.tmp = tempfile.mkdtemp()
+        self.db = Database(os.path.join(self.tmp, "sync.db"))
 
     def tearDown(self):
         self.db.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_insert_and_get_by_row_number(self):
-        rec = self.db.upsert_row(
-            2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt",
-            "content", "hash1", 100, 123.0,
+    def _insert(self, key="top_news", label="Top News", txt="row_01.txt",
+                content="लाइन एक\nलाइन दो", file_hash="h1", size=100, mtime=1.0):
+        return self.db.upsert_feed(
+            key, label, txt, f"C:\\notepad\\{txt}", content, file_hash, size, mtime
         )
-        self.assertEqual(rec.row_number, 2)
-        fetched = self.db.get_by_row_number(2)
-        self.assertEqual(fetched.file_name, "row_02.txt")
 
-    def test_upsert_updates_existing_row_keeps_row_number(self):
-        rec = self.db.upsert_row(
-            2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt",
-            "old content", "hash1", 100, 123.0,
-        )
-        updated = self.db.upsert_row(
-            2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt",
-            "new content", "hash2", 120, 200.0,
-        )
-        self.assertEqual(updated.row_number, rec.row_number)
-        self.assertEqual(updated.content, "new content")
-        self.assertEqual(updated.created_at, rec.created_at)  # created_at preserved
+    def test_insert_then_fetch(self):
+        rec = self._insert()
+        self.assertEqual(rec.feed_key, "top_news")
+        self.assertEqual(rec.label, "Top News")
+        self.assertEqual(rec.txt_file, "row_01.txt")
+        self.assertEqual(self.db.get_by_feed_key("top_news").id, rec.id)
 
-    def test_delete_row_removes_record_entirely(self):
-        self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "content", "hash1", 100, 123.0)
-        self.db.delete_row(3)
-        self.assertIsNone(self.db.get_by_row_number(3))
+    def test_news_lines_split_from_content(self):
+        rec = self._insert(content="एक\nदो\nतीन")
+        self.assertEqual(rec.news_lines, ["एक", "दो", "तीन"])
+
+    def test_empty_content_yields_no_lines(self):
+        self.assertEqual(self._insert(content="").news_lines, [])
+
+    def test_upsert_updates_in_place_keeping_id(self):
+        first = self._insert()
+        second = self._insert(content="बदली हुई लाइन", file_hash="h2", size=200, mtime=2.0)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(second.content, "बदली हुई लाइन")
+        self.assertEqual(len(self.db.get_all()), 1)
+
+    def test_feed_key_is_unique(self):
+        self._insert()
+        self._insert()
+        self.assertEqual(len(self.db.get_all()), 1)
+
+    def test_multiple_feeds_coexist(self):
+        self._insert("top_news", "Top News", "row_01.txt")
+        self._insert("upper_band", "Upper Band", "row_10.txt")
+        self._insert("breaking_news", "Breaking News", "row_04.txt")
+        self.assertEqual(len(self.db.get_all()), 3)
+        self.assertEqual(
+            self.db.get_all_feed_keys(), {"top_news", "upper_band", "breaking_news"}
+        )
+
+    def test_delete_is_a_hard_delete(self):
+        self._insert()
+        self.db.delete_feed("top_news")
+        self.assertIsNone(self.db.get_by_feed_key("top_news"))
         self.assertEqual(self.db.get_all(), [])
 
-    def test_recreate_after_delete_is_a_fresh_insert(self):
-        self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "old", "h1", 1, 1.0)
-        self.db.delete_row(3)
-        recreated = self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "new", "h2", 2, 2.0)
-        self.assertEqual(recreated.row_number, 3)
-        self.assertEqual(recreated.content, "new")
+    def test_delete_of_unknown_key_is_a_no_op(self):
+        self._insert()
+        self.db.delete_feed("not_a_feed")
+        self.assertEqual(len(self.db.get_all()), 1)
 
-    def test_search_by_category_and_filename(self):
-        self.db.upsert_row(2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt", "", "h", 1, 1.0)
-        self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "", "h", 1, 1.0)
-        results = self.db.search("बंगाल")
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].category, "खबर बंगाल")
-        results2 = self.db.search("row_02")
-        self.assertEqual(len(results2), 1)
+    def test_update_label(self):
+        self._insert()
+        self.db.update_label("top_news", "Renamed")
+        self.assertEqual(self.db.get_by_feed_key("top_news").label, "Renamed")
 
-    def test_get_all_row_numbers(self):
-        self.db.upsert_row(2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt", "", "h", 1, 1.0)
-        self.db.upsert_row(5, "खबर बिहार", "row_05.txt", r"C:\notepad\row_05.txt", "", "h", 1, 1.0)
-        self.assertEqual(self.db.get_all_row_numbers(), {2, 5})
+    def test_touch_last_synced_leaves_content_alone(self):
+        rec = self._insert()
+        self.db.touch_last_synced("top_news")
+        self.assertEqual(self.db.get_by_feed_key("top_news").content, rec.content)
 
-    def test_refresh_categories(self):
-        self.db.upsert_row(2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt", "", "h", 1, 1.0)
-        self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "", "h", 1, 1.0)
-        mapping = {2: "India Renamed", 3: "Bengal Renamed"}
-        self.db.refresh_categories(lambda row_number: mapping.get(row_number, "Unassigned"))
-        self.assertEqual(self.db.get_by_row_number(2).category, "India Renamed")
-        self.assertEqual(self.db.get_by_row_number(3).category, "Bengal Renamed")
+    def test_search_matches_label_txt_file_and_key(self):
+        self._insert("top_news", "Top News", "row_01.txt")
+        self._insert("upper_band", "Upper Band", "row_10.txt")
+        self.assertEqual(len(self.db.search("Upper")), 1)
+        self.assertEqual(len(self.db.search("row_01")), 1)
+        self.assertEqual(len(self.db.search("upper_band")), 1)
+        self.assertEqual(len(self.db.search("nothing")), 0)
 
-    def test_stats(self):
-        self.db.upsert_row(2, "खबर India", "row_02.txt", r"C:\notepad\row_02.txt", "line1\nline2", "h", 1, 1.0)
-        self.db.upsert_row(3, "खबर बंगाल", "row_03.txt", r"C:\notepad\row_03.txt", "line1\nline2\nline3", "h", 1, 1.0)
+    def test_stats_counts_feeds_and_news_items(self):
+        self._insert("top_news", "Top News", "row_01.txt", content="एक\nदो")
+        self._insert("upper_band", "Upper Band", "row_10.txt", content="तीन")
         stats = self.db.stats()
         self.assertEqual(stats["total_files"], 2)
-        self.assertEqual(stats["news_items"], 5)
-        self.assertEqual(stats["active_categories"], 2)
+        self.assertEqual(stats["news_items"], 3)
 
-    def test_stats_empty_content_counts_zero_news_items(self):
-        self.db.upsert_row(9, "Full Screen Breaking", "row_09.txt", r"C:\notepad\row_09.txt", "", "h", 1, 1.0)
-        stats = self.db.stats()
-        self.assertEqual(stats["total_files"], 1)
-        self.assertEqual(stats["news_items"], 0)
+    def test_stats_on_empty_database(self):
+        self.assertEqual(self.db.stats(), {"total_files": 0, "news_items": 0})
+
+    def test_schema_survives_reopen(self):
+        self._insert()
+        self.db.close()
+        reopened = Database(os.path.join(self.tmp, "sync.db"))
+        try:
+            self.assertEqual(reopened.get_by_feed_key("top_news").txt_file, "row_01.txt")
+        finally:
+            reopened.close()
 
 
 if __name__ == "__main__":

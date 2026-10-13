@@ -1,4 +1,4 @@
-TXT News to Excel Sync - Portable (Windows 7 SP1 64-bit build)
+Taaza News Excel Sync - Portable (Windows 7 SP1 64-bit build)
 ================================================================
 
 This folder is fully self-contained: it does NOT require Python or
@@ -17,17 +17,34 @@ restart normally required). This is a standard, official Microsoft
 redistributable used by thousands of Windows applications - not a
 random/unofficial DLL.
 
-If you used WordToExcelHindiSync_Win7_Setup.exe instead of this portable
+If you used TaazaNewsExcelSync_Win7_Setup.exe instead of this portable
 folder, this prerequisite is installed for you automatically.
 
 HOW TO RUN
 ----------
-Double-click WordToExcelHindiSync.exe.
+Double-click TaazaNewsExcelSync.exe.
 
-On first launch, a config.json and a logs\ folder are created under:
-    %APPDATA%\TxtNewsExcelSync\
+On first launch, a config.json, sync.db and a logs\ folder are created under:
+    %APPDATA%\TaazaNewsExcelSync\
 
-WHERE TO PUT YOUR .txt FILES
------------------------------
-By default: Documents\notepad\  (row_01.txt, row_02.txt, ...)
-Change this from inside the app if needed.
+This is a separate folder from the older "TXT News to Excel Sync" app, so
+both can be installed and run on the same machine without interfering.
+
+THE FOUR FEEDS
+--------------
+Each source .txt file is written to its own Excel workbook:
+
+    row_01.txt  ->  TopNewsLT.xlsx            (Top News)
+    row_10.txt  ->  Upper Band.xlsx           (Upper Band)
+    row_04.txt  ->  Breaking LT.xlsx          (Breaking News)
+    row_09.txt  ->  Breaking FF + Top.xlsx    (Full Screen Breaking)
+
+No other file in either folder is read or written.
+
+WHERE TO PUT YOUR FILES
+-----------------------
+TXT folder   (default): Documents\notepad\
+Excel folder (default): Desktop\Excel taza tv\
+
+Change either from inside the app (Browse buttons). The file names above
+can be changed under FEED MAPPING (password: 2001).

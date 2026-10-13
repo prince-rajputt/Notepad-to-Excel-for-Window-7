@@ -1,7 +1,7 @@
-# Windows 7 SP1 64-bit Build & Deployment Guide
+﻿# Windows 7 SP1 64-bit Build & Deployment Guide
 
 This document covers the Windows 7-compatible build of **TXT News to Excel
-Sync** (WordToExcelHindiSync), added alongside the existing modern build.
+Sync** (TaazaNewsExcelSync), added alongside the existing modern build.
 Nothing about the application's TXT → Excel logic, Hindi/Unicode handling,
 or UI was changed — only the Python version, dependency pins, and packaging
 were adjusted for Windows 7 SP1 64-bit compatibility.
@@ -26,7 +26,7 @@ api-ms-win-core-path-l1-1-0.dll is missing from your computer
 official Windows 7 SP1 support.
 
 This was verified directly by inspecting the built binaries' PE import
-tables (`pefile`): the Windows-7 build's `WordToExcelHindiSync.exe` and its
+tables (`pefile`): the Windows-7 build's `TaazaNewsExcelSync.exe` and its
 bundled `python38.dll` / Tcl-Tk DLLs reference **zero** `api-ms-win-core-*`
 DLLs. They do reference `api-ms-win-crt-*` DLLs (Universal CRT) — a
 separate, legitimately-fixable dependency, handled in Section 3.
@@ -100,7 +100,7 @@ Already done in this session; kept separate from your normal environment:
    redistributable, downloaded once and bundled into the installer.
 
 Your existing Python 3.13 install, `requirements.txt`, `venv` (if any),
-`WordToExcelHindiSync.spec`, `dist\`, and `installer.iss` were **not
+`TaazaNewsExcelSync.spec`, `dist\`, and `installer.iss` were **not
 touched** - they still build the modern (non-Windows-7) version exactly as
 before.
 
@@ -129,20 +129,20 @@ still at `F:\PyWin7Build\Python38\python.exe` and Inno Setup is installed.
 |---|---|
 | Is Python required? | **No.** |
 | Is PyInstaller required? | **No.** |
-| Is a Microsoft runtime/UCRT required? | **Yes** - VC++ 2015-2022 x64 Redistributable. The installer (`WordToExcelHindiSync_Win7_Setup.exe`) installs it automatically if missing. Portable ZIP users may need to install it manually once (link in `README_PORTABLE.txt`, also `https://aka.ms/vs/17/release/vc_redist.x64.exe`). |
+| Is a Microsoft runtime/UCRT required? | **Yes** - VC++ 2015-2022 x64 Redistributable. The installer (`TaazaNewsExcelSync_Win7_Setup.exe`) installs it automatically if missing. Portable ZIP users may need to install it manually once (link in `README_PORTABLE.txt`, also `https://aka.ms/vs/17/release/vc_redist.x64.exe`). |
 | Is internet required to run the app? | No (only needed once, if using the portable ZIP and the VC++ runtime isn't already on the machine). |
-| Where is it installed? | `C:\Users\<user>\AppData\Local\TXT News to Excel Sync\` by default (per-user install, no admin required - `PrivilegesRequired=lowest`). Can be redirected to `C:\Program Files\...` if run elevated. |
-| Where does it store data? | `%APPDATA%\TxtNewsExcelSync\` - `config.json`, `logs\app.log`, `sync.db` (unless you point `txt_root`/`excel_file` elsewhere in the app). |
-| How to launch it? | Start Menu → "TXT News to Excel Sync", or the desktop shortcut if that task was selected during install. |
-| How to uninstall it? | Start Menu → "Uninstall TXT News to Excel Sync", or Control Panel → Programs and Features. |
+| Where is it installed? | `C:\Users\<user>\AppData\Local\Taaza News Excel Sync\` by default (per-user install, no admin required - `PrivilegesRequired=lowest`). Can be redirected to `C:\Program Files\...` if run elevated. |
+| Where does it store data? | `%APPDATA%\TaazaNewsExcelSync\` - `config.json`, `logs\app.log`, `sync.db` (unless you point `txt_root`/`excel_file` elsewhere in the app). |
+| How to launch it? | Start Menu → "Taaza News Excel Sync", or the desktop shortcut if that task was selected during install. |
+| How to uninstall it? | Start Menu → "Uninstall Taaza News Excel Sync", or Control Panel → Programs and Features. |
 
 ### Troubleshooting missing-DLL errors on Windows 7
 
 1. **`api-ms-win-core-*.dll is missing`** - this should not happen with this
    build (verified: zero such references). If it somehow does, you are
    likely running the *old* (Python 3.13) EXE by mistake - confirm you're
-   launching the one installed by `WordToExcelHindiSync_Win7_Setup.exe` or
-   from the Windows-7 portable ZIP, not `dist\WordToExcelHindiSync.exe`
+   launching the one installed by `TaazaNewsExcelSync_Win7_Setup.exe` or
+   from the Windows-7 portable ZIP, not `dist\TaazaNewsExcelSync.exe`
    (that's the modern build).
 2. **`api-ms-win-crt-*.dll` / `VCRUNTIME140.dll` / `ucrtbase.dll` missing**
    (portable ZIP only) - install the official Microsoft VC++ 2015-2022 x64
@@ -153,18 +153,24 @@ still at `F:\PyWin7Build\Python38\python.exe` and Inno Setup is installed.
    etc.; if the VC++ redistributable itself refuses to install, run Windows
    Update first, then retry.
 4. Check `logs\app.log` next to where `config.json` lives
-   (`%APPDATA%\TxtNewsExcelSync\logs\app.log`) for application-level errors
+   (`%APPDATA%\TaazaNewsExcelSync\logs\app.log`) for application-level errors
    unrelated to missing DLLs.
 
 ---
 
 ## 6. Test procedure (to run on an actual clean Windows 7 SP1 64-bit machine)
 
-This build has been verified on the development machine (imports cleanly
-under Python 3.8, all 81 unit tests pass, PE import tables contain no
-`api-ms-win-core-*` references). **It has not yet been executed on a real
-Windows 7 machine** - that hardware/VM was not available in this
-environment. Run these before considering it production-ready:
+This build has been verified on the development machine: it imports cleanly
+under Python 3.8, all 157 unit tests pass, PE import tables for the EXE
+and its bundled `python38.dll`/`tcl86t.dll`/`tk86t.dll` contain **zero**
+`api-ms-win-core-*` references, and the built EXE was actually launched on
+the dev machine, ran its initial scan, detected real file changes, wrote
+all four Excel workbooks correctly, and ran a clean background sync loop
+(most recently re-verified 2026-08-24 after a substantial app rewrite -
+four-feed model, single-instance guard, GUI overhaul - see Section 8 for
+what changed). **It has not yet been executed on a real Windows 7 machine**
+- that hardware/VM was not available in this environment. Run these before
+considering it production-ready:
 
 1. Launch the application (double-click the installed EXE, or run the
    installer first).
@@ -180,7 +186,7 @@ environment. Run these before considering it production-ready:
    - `News Category` sheet: full row/category mapping.
 6. Restart Windows.
 7. Launch the application again - confirm `config.json` / `sync.db` /
-   `logs\` persisted under `%APPDATA%\TxtNewsExcelSync\`.
+   `logs\` persisted under `%APPDATA%\TaazaNewsExcelSync\`.
 8. Test automatic sync: with the app running and **START MONITORING**
    active, edit/add/delete a `row_XX.txt` file in the watched folder and
    confirm Excel updates without manually clicking SYNC NOW.
@@ -192,6 +198,32 @@ environment. Run these before considering it production-ready:
 
 Record pass/fail for each step; report back any failure with the exact
 error text and which step it occurred at.
+
+---
+
+## 6b. Troubleshooting: rebuild fails even though Python 3.8.10 is at `F:\PyWin7Build\Python38`
+
+If `F:` (an external/removable drive) is ever disconnected and reconnected,
+or if the Python 3.8.10 install there gets reinstalled, Windows Installer's
+**per-user product registration** for "Python 3.8.10" can end up corrupted
+even after `F:` is back and `venv-win7\Scripts\python.exe --version` works
+fine. Symptom: a fresh `python-3.8.10-amd64.exe /quiet ... TargetDir=...`
+install reports success (exit code 0), but `python38.dll` never gets copied
+to the target directory, and the app fails to launch with
+`STATUS_DLL_NOT_FOUND`. This happened once during development (2026-08-24)
+after `F:` had been temporarily unavailable and a reinstall was attempted to
+`C:\PyWin7Build` in the meantime - not needed once `F:` was reconnected, but
+it left Windows Installer's bookkeeping confused about whether "Python
+3.8.10" was already installed.
+
+**Fix, if this recurs:** Settings/Control Panel -> Programs and Features ->
+uninstall "Python 3.8.10 (64-bit)" (it's safe even if it reports errors
+about missing files - that's expected and it still clears the stale
+registration), then retry the install. This must be done interactively (not
+via an automated script) because the underlying per-user Windows Installer
+product keys are ACL-protected in a way that even the same user account
+cannot delete without going through Windows Installer's own elevated
+uninstall flow.
 
 ---
 
@@ -224,12 +256,12 @@ error text and which step it occurred at.
 - `WINDOWS_7_SETUP.md` (this file)
 - `venv-win7\` (build environment, not shipped)
 - `win7_prereqs\vc_redist.x64.exe` (bundled into the installer)
-- `dist-win7\WordToExcelHindiSync.exe` (build output)
+- `dist-win7\TaazaNewsExcelSync.exe` (build output)
 - `build-win7\` (PyInstaller intermediate work dir, not shipped)
-- `installer_output_win7\WordToExcelHindiSync_Win7_Setup.exe` (final installer)
-- `WordToExcelHindiSync_Portable.zip` (final portable package)
+- `installer_output_win7\TaazaNewsExcelSync_Win7_Setup.exe` (final installer)
+- `TaazaNewsExcelSync_Portable.zip` (final portable package)
 
 **Unchanged (still your existing modern build):**
-- `requirements.txt`, `WordToExcelHindiSync.spec`, `build_exe.ps1`,
+- `requirements.txt`, `TaazaNewsExcelSync.spec`, `build_exe.ps1`,
   `installer.iss`, `build_installer.ps1`, `dist\`, `installer_output\`
 - All of `app\*.py`, `main.py`, `tests\`, `demo_data\`, `assets\`

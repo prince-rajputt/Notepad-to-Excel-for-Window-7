@@ -11,3 +11,6 @@ tests/manual/_e2e_workspace/
 *.db
 
 venv-win7/
+
+# Per-machine settings (recreated on first launch; holds local paths + mapping password)
+config.json
