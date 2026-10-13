@@ -1,10 +1,10 @@
-"""Ties together the scanner, database, txt reader and excel manager.
+"""Ties together the database, txt reader and excel manager.
 
-The row number parsed from a filename is the file's permanent identity.
-The Excel workbook is a LIVE MIRROR of the currently-existing row_XX.txt
-files: on every sync, News Data is fully rebuilt from the database, which
-itself only ever contains records for files that currently exist on disk
-(deleting a file hard-deletes its database record).
+Each feed is independent: one source .txt file, one destination workbook.
+A feed's workbook is a LIVE MIRROR of its .txt file - on every sync it is
+fully rebuilt from the database, which itself only ever holds records for
+source files that currently exist on disk (deleting a .txt file hard-deletes
+its record and empties its workbook).
 """
 import difflib
 import logging
@@ -12,13 +12,17 @@ import os
 import threading
 
 from app.errors import DocumentReadError
-from app.excel_manager import ExcelLockedError, generate_excel
-from app.row_mapping import category_for_row, is_row_enabled, parse_row_number
-from app.scanner import get_file_stat, list_target_files
+from app.excel_manager import (
+    ExcelLockedError,
+    UnknownFeedFormatError,
+    generate_feed_excel,
+)
+from app.feeds import feed_for_txt_filename
+from app.scanner import get_file_stat
 from app.txt_reader import extract_hindi_message
-from app.utils import compute_file_hash, is_supported_file
+from app.utils import compute_file_hash
 
-logger = logging.getLogger("word_to_excel_sync")
+logger = logging.getLogger("taaza_news_excel_sync")
 
 LINE_PREVIEW_CHARS = 90
 
@@ -33,7 +37,7 @@ class SyncEngine:
         self.db = db
         self.config = config
         self._lock = threading.RLock()
-        self.excel_pending = False
+        self._pending_excel = set()  # feed keys whose workbook is waiting on a lock
         self.on_event = None  # optional callback(message: str) for GUI activity log
 
     def _notify(self, message):
@@ -49,43 +53,51 @@ class SyncEngine:
         return self.config.txt_root
 
     @property
-    def excel_file(self):
-        return self.config.excel_file
+    def excel_root(self):
+        return self.config.excel_root
 
     @property
-    def watch_extensions(self):
-        return self.config.get("watch_extensions", [".txt"])
+    def feeds(self):
+        return self.config.feeds
 
-    # -- single-file processing --------------------------------------------------
+    @property
+    def excel_pending(self):
+        """True while at least one workbook is waiting for its file to unlock."""
+        return bool(self._pending_excel)
 
-    def process_file(self, full_path):
-        """Create or update the DB record for one row_XX.txt file based on its
-        current content.
+    def is_feed_pending(self, feed_key):
+        """True while this specific feed's workbook is waiting for its file to unlock."""
+        return feed_key in self._pending_excel
 
-        Returns the resulting FileRecord, or None if the file could not be
-        processed (missing, unreadable, or its filename doesn't match the
-        row_XX.txt pattern) - any error is logged and processing continues.
+    def feed_for_path(self, full_path):
+        """Return the Feed a path belongs to, or None.
+
+        A path only matches if it is directly inside the configured txt_root
+        AND its file name is exactly one of the four configured source files -
+        every other file and every subfolder is ignored.
         """
-        filename = os.path.basename(full_path)
-        if not is_supported_file(filename, self.watch_extensions):
+        directory = os.path.dirname(os.path.abspath(full_path))
+        if os.path.normcase(directory) != os.path.normcase(os.path.abspath(self.txt_root)):
             return None
+        return feed_for_txt_filename(os.path.basename(full_path), self.feeds)
 
-        row_number = parse_row_number(filename)
-        if row_number is None:
-            logger.warning("Skipping non-row TXT file (expected row_XX.txt): %s", filename)
-            return None
+    # -- single-feed processing --------------------------------------------------
 
-        if not is_row_enabled(row_number, self.config):
-            logger.debug("Skipping disabled row %s (%s): not in row_categories", row_number, filename)
-            return None
+    def process_feed(self, feed):
+        """Create or update the DB record for one feed from its source file.
 
+        Returns the resulting FeedRecord, or None if the source file is
+        missing or unreadable - any error is logged and processing continues.
+        """
+        full_path = self.config.txt_path(feed)
         size, mtime = get_file_stat(full_path)
         if size is None:
-            logger.warning("File disappeared before it could be processed: %s", full_path)
+            # Missing source file: drop any stale record so the workbook empties.
+            self._forget_feed(feed.key, feed.txt_file)
             return None
 
         with self._lock:
-            existing = self.db.get_by_row_number(row_number)
+            existing = self.db.get_by_feed_key(feed.key)
 
             unchanged = (
                 existing is not None
@@ -94,14 +106,13 @@ class SyncEngine:
                 and existing.mtime == mtime
             )
             if unchanged:
-                # Even when the file itself hasn't changed, the row_categories
-                # mapping in config.json may have - always re-sync the category
-                # so a config edit is never masked by this fast path.
-                current_category = category_for_row(row_number, self.config)
-                if existing.category != current_category:
-                    self.db.update_category(row_number, current_category)
-                    existing = self.db.get_by_row_number(row_number)
-                self.db.touch_last_synced(row_number)
+                # Even when the file itself hasn't changed, the feed's label
+                # may have been edited - keep it in sync so a config edit is
+                # never masked by this fast path.
+                if existing.label != feed.label:
+                    self.db.update_label(feed.key, feed.label)
+                    existing = self.db.get_by_feed_key(feed.key)
+                self.db.touch_last_synced(feed.key)
                 return existing
 
             try:
@@ -115,12 +126,11 @@ class SyncEngine:
                 and existing.full_path == full_path
                 and existing.file_hash == file_hash
             )
-            category = category_for_row(row_number, self.config)
 
             if content_unchanged:
                 # metadata changed (e.g. touched) but content identical - avoid reparsing
-                return self.db.upsert_row(
-                    row_number, category, filename, full_path,
+                return self.db.upsert_feed(
+                    feed.key, feed.label, feed.txt_file, full_path,
                     existing.content, file_hash, size, mtime,
                 )
 
@@ -133,20 +143,27 @@ class SyncEngine:
             was_new = existing is None
             news_count = len(content.split("\n")) if content else 0
 
-            record = self.db.upsert_row(
-                row_number, category, filename, full_path, content, file_hash, size, mtime
+            record = self.db.upsert_feed(
+                feed.key, feed.label, feed.txt_file, full_path, content,
+                file_hash, size, mtime,
             )
 
             if was_new:
-                self._notify(f"✓ {filename} detected")
-                self._notify(f"✓ {category} processed")
-                self._notify(f"✓ {news_count} Hindi news items extracted")
+                self._notify(f"✓ {feed.txt_file} detected ({feed.label})")
+                self._notify(f"✓ {news_count} news items extracted")
                 self._notify("✓ BITMAP tags removed")
             else:
-                self._notify(f"↻ {filename} modified")
-                self._notify(f"↻ {category} refreshed")
+                self._notify(f"↻ {feed.txt_file} modified ({feed.label})")
                 self._notify_line_diff(existing.content, content)
             return record
+
+    def _forget_feed(self, feed_key, txt_file):
+        with self._lock:
+            existing = self.db.get_by_feed_key(feed_key)
+            if existing:
+                self.db.delete_feed(feed_key)
+                self._notify(f"✗ {txt_file} deleted")
+                self._notify(f"✗ {existing.label} news cleared from its Excel file")
 
     def _notify_line_diff(self, old_content, new_content):
         """Emit one activity-log line per changed news line, so the user can see
@@ -167,68 +184,62 @@ class SyncEngine:
                 for new_line in new_lines[j1:j2]:
                     self._notify(f"+ line added: \"{_preview(new_line)}\"")
 
-    def handle_created(self, full_path):
-        record = self.process_file(full_path)
-        self.regenerate_excel()
+    # -- filesystem event handling -------------------------------------------
+
+    def handle_changed(self, full_path):
+        """A configured source file was created or modified."""
+        feed = self.feed_for_path(full_path)
+        if feed is None:
+            return None
+        record = self.process_feed(feed)
+        self.regenerate_feed_excel(feed)
         return record
 
-    def handle_modified(self, full_path):
-        record = self.process_file(full_path)
-        self.regenerate_excel()
-        return record
+    handle_created = handle_changed
+    handle_modified = handle_changed
 
     def handle_deleted(self, full_path):
-        filename = os.path.basename(full_path)
-        row_number = parse_row_number(filename)
-        if row_number is not None:
-            with self._lock:
-                existing = self.db.get_by_row_number(row_number)
-                if existing:
-                    self.db.delete_row(row_number)
-                    self._notify(f"✗ {filename} deleted")
-                    self._notify(f"✗ {existing.category} news removed from current Excel")
-        self.regenerate_excel()
+        feed = self.feed_for_path(full_path)
+        if feed is None:
+            return
+        self._forget_feed(feed.key, feed.txt_file)
+        self.regenerate_feed_excel(feed)
 
     def handle_moved(self, src_path, dest_path):
-        # Identity is derived purely from the row_XX.txt filename pattern, so a
-        # rename/move is just "the old path's row is gone, the new path's row
-        # appeared" - both cases reuse the existing create/delete handling.
+        # A feed's identity is its configured file name, so a rename is just
+        # "the old name vanished, the new name appeared" - both sides reuse the
+        # normal delete/create handling, and non-feed names are ignored.
         self.handle_deleted(src_path)
-        self.process_file(dest_path)
-        self.regenerate_excel()
+        self.handle_changed(dest_path)
 
     # -- full scan / reconciliation -----------------------------------------------
 
-    def run_full_scan(self, reason="scan"):
-        """Scan the root folder, sync every row_XX.txt file, and remove records for
-        rows whose file has vanished. Used for both the initial scan on startup and
-        the manual "SYNC NOW" / reconciliation flow - the logic is identical.
+    def run_full_scan(self, reason="scan", silent=False):
+        """Sync every configured feed and purge records for feeds whose source
+        file has vanished (or which are no longer configured at all). Used for
+        the initial scan on startup, the manual "SYNC NOW" flow, and the
+        periodic background safety-net scan (silent=True, so it doesn't spam
+        the activity log every few seconds when nothing actually changed).
         """
-        self._notify(f"{reason} started")
-        current_paths = list_target_files(self.txt_root, self.watch_extensions)
+        if not silent:
+            self._notify(f"{reason} started")
+        feeds = self.feeds
 
-        current_row_numbers = set()
-        for path in current_paths:
-            row_number = parse_row_number(os.path.basename(path))
-            if row_number is not None and is_row_enabled(row_number, self.config):
-                current_row_numbers.add(row_number)
-            self.process_file(path)
+        for feed in feeds:
+            self.process_feed(feed)
 
         with self._lock:
-            # Anything tracked that is no longer both present-on-disk AND enabled
-            # (file deleted, or its row was removed from the mapping) is purged -
-            # Excel must never show a row number outside the current whitelist.
-            tracked_row_numbers = self.db.get_all_row_numbers()
-            missing_row_numbers = tracked_row_numbers - current_row_numbers
-            for row_number in missing_row_numbers:
-                existing = self.db.get_by_row_number(row_number)
+            configured_keys = {feed.key for feed in feeds}
+            for stale_key in self.db.get_all_feed_keys() - configured_keys:
+                existing = self.db.get_by_feed_key(stale_key)
                 if existing:
-                    self.db.delete_row(row_number)
-                    self._notify(f"✗ {existing.file_name} deleted")
-                    self._notify(f"✗ {existing.category} news removed from current Excel")
+                    self.db.delete_feed(stale_key)
+                    self._notify(f"✗ {existing.txt_file} is no longer a configured feed")
 
-        self.regenerate_excel()
-        self._notify(f"{reason} completed")
+        for feed in feeds:
+            self.regenerate_feed_excel(feed, silent=silent)
+        if not silent:
+            self._notify(f"{reason} completed")
 
     def run_initial_scan(self):
         self.run_full_scan(reason="Initial scan")
@@ -236,30 +247,49 @@ class SyncEngine:
     def run_reconciliation(self):
         self.run_full_scan(reason="Reconciliation")
 
-    # -- category mapping -----------------------------------------------------
-
-    def refresh_categories(self):
-        """Re-apply the current config row/category mapping to every existing
-        record (used after the user edits the Row/Category Mapping panel), and
-        regenerate Excel so the change is visible immediately."""
-        self.db.refresh_categories(lambda row_number: category_for_row(row_number, self.config))
-        self.regenerate_excel()
-        self._notify("Row/Category mapping updated")
-
     # -- excel ---------------------------------------------------------------
 
-    def regenerate_excel(self):
-        was_pending = self.excel_pending
-        records = self.db.get_all()
+    def regenerate_feed_excel(self, feed, silent=False):
+        """Rebuild one feed's workbook from its database record.
+
+        `silent` is set by the periodic background safety-net scan, which
+        rewrites every workbook every few seconds purely as a lock-recovery
+        check - it did not observe any real change, so it must not announce
+        "updated (N rows)" on data that hasn't moved. Recovering from a lock
+        and genuine errors are still worth surfacing even when silent.
+        """
+        record = self.db.get_by_feed_key(feed.key)
+        lines = record.news_lines if record else []
+        excel_path = self.config.excel_path(feed)
+        was_pending = feed.key in self._pending_excel
         try:
-            generate_excel(records, self.excel_file, self.config.row_categories)
-            self.excel_pending = False
+            generate_feed_excel(
+                feed, lines, excel_path,
+                self.config.default_visibility,
+                self.config.default_category_time,
+                self.config.first_category_time,
+                self.config.first_category_count,
+            )
+            self._pending_excel.discard(feed.key)
             if was_pending:
-                self._notify("✓ Excel synchronized (file was unlocked)")
-            else:
-                self._notify("✓ Excel updated")
+                self._notify(f"✓ {feed.excel_file} synchronized (file was unlocked)")
+            elif not silent:
+                self._notify(f"✓ {feed.excel_file} updated ({len(lines)} rows)")
         except ExcelLockedError as exc:
-            self.excel_pending = True
+            self._pending_excel.add(feed.key)
             logger.warning("Excel locked, synchronization pending: %s", exc)
             if not was_pending:
-                self._notify("Excel file is open/locked - update pending")
+                self._notify(f"{feed.excel_file} is open/locked - update pending")
+        except UnknownFeedFormatError as exc:
+            logger.error("%s", exc)
+            self._notify(f"✗ {feed.excel_file} skipped: {exc}")
+
+    def regenerate_all_excel(self):
+        for feed in self.feeds:
+            self.regenerate_feed_excel(feed)
+
+    def retry_pending_excel(self):
+        """Re-attempt only the workbooks that are waiting on a file lock."""
+        for feed in self.feeds:
+            if feed.key in self._pending_excel:
+                self.regenerate_feed_excel(feed)

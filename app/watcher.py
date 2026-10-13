@@ -6,16 +6,21 @@ import threading
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from app.utils import is_supported_file, wait_for_stable_file
+from app.utils import wait_for_stable_file
 
-logger = logging.getLogger("word_to_excel_sync")
+logger = logging.getLogger("taaza_news_excel_sync")
 
 DEBOUNCE_SECONDS = 1.5
 
 
 class _DebouncedHandler(FileSystemEventHandler):
-    """Coalesces the burst of create/modify events one Word save typically produces,
-    waits for the file to finish being written, then hands it to the sync engine.
+    """Coalesces the burst of create/modify events one Notepad save typically
+    produces, waits for the file to finish being written, then hands it to the
+    sync engine.
+
+    Every event is filtered through engine.feed_for_path() first, so only the
+    configured source files trigger any work - the rest of the folder's
+    contents are ignored no matter how often they change.
     """
 
     def __init__(self, engine, debounce_seconds=DEBOUNCE_SECONDS):
@@ -23,6 +28,9 @@ class _DebouncedHandler(FileSystemEventHandler):
         self.debounce_seconds = debounce_seconds
         self._timers = {}
         self._lock = threading.Lock()
+
+    def _is_feed_path(self, path):
+        return self.engine.feed_for_path(path) is not None
 
     def on_created(self, event):
         if event.is_directory:
@@ -37,8 +45,7 @@ class _DebouncedHandler(FileSystemEventHandler):
     def on_deleted(self, event):
         if event.is_directory:
             return
-        filename = os.path.basename(event.src_path)
-        if not is_supported_file(filename, self.engine.watch_extensions):
+        if not self._is_feed_path(event.src_path):
             return
         self._cancel(event.src_path)
         try:
@@ -50,19 +57,17 @@ class _DebouncedHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         self._cancel(event.src_path)
-        src_name = os.path.basename(event.src_path)
-        dest_name = os.path.basename(event.dest_path)
-        extensions = self.engine.watch_extensions
-        if not is_supported_file(src_name, extensions) and not is_supported_file(dest_name, extensions):
+        if not self._is_feed_path(event.src_path) and not self._is_feed_path(event.dest_path):
             return
         try:
             self.engine.handle_moved(event.src_path, event.dest_path)
         except Exception:  # noqa: BLE001
-            logger.exception("Watcher error handling move: %s -> %s", event.src_path, event.dest_path)
+            logger.exception(
+                "Watcher error handling move: %s -> %s", event.src_path, event.dest_path
+            )
 
     def _schedule(self, path):
-        filename = os.path.basename(path)
-        if not is_supported_file(filename, self.engine.watch_extensions):
+        if not self._is_feed_path(path):
             return
         with self._lock:
             existing = self._timers.get(path)
@@ -90,8 +95,7 @@ class _DebouncedHandler(FileSystemEventHandler):
             logger.warning("File did not stabilize before processing, proceeding anyway: %s", path)
 
         try:
-            self.engine.process_file(path)
-            self.engine.regenerate_excel()
+            self.engine.handle_changed(path)
         except Exception:  # noqa: BLE001
             logger.exception("Watcher error processing file: %s", path)
 
@@ -109,7 +113,7 @@ class FolderWatcher:
             return
         root = self.engine.txt_root
         if not os.path.isdir(root):
-            raise FileNotFoundError(f"Word root folder does not exist: {root}")
+            raise FileNotFoundError(f"TXT folder does not exist: {root}")
         self._observer = Observer()
         self._observer.schedule(self.handler, root, recursive=False)
         self._observer.start()

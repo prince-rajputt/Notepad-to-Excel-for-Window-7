@@ -12,7 +12,7 @@ import re
 
 from app.errors import DocumentReadError
 
-logger = logging.getLogger("word_to_excel_sync")
+logger = logging.getLogger("taaza_news_excel_sync")
 
 BITMAP_PATTERN = re.compile(r"<BITMAP>.*?</BITMAP>", re.IGNORECASE | re.DOTALL)
 WHITESPACE_RUN = re.compile(r"[ \t]+")

@@ -1,11 +1,11 @@
 @echo off
 REM ============================================================
-REM  Windows 7 SP1 64-bit build for TXT News to Excel Sync
+REM  Windows 7 SP1 64-bit build for Taaza News Excel Sync
 REM
 REM  Produces:
-REM    dist-win7\WordToExcelHindiSync.exe
-REM    WordToExcelHindiSync_Portable.zip
-REM    installer_output_win7\WordToExcelHindiSync_Win7_Setup.exe
+REM    dist-win7\TaazaNewsExcelSync.exe
+REM    TaazaNewsExcelSync_Portable.zip
+REM    installer_output_win7\TaazaNewsExcelSync_Win7_Setup.exe
 REM
 REM  Requirements on THIS (build) machine:
 REM    - Python 3.8.10 (64-bit) installed at F:\PyWin7Build\Python38
@@ -45,10 +45,11 @@ if exist dist-win7 rmdir /s /q dist-win7
 
 echo === [4/6] Running PyInstaller (Python 3.8 / PyInstaller 5.13.2) ===
 venv-win7\Scripts\python.exe -m PyInstaller ^
-    --name "WordToExcelHindiSync" ^
+    --name "TaazaNewsExcelSync" ^
     --windowed ^
     --onefile ^
     --noupx ^
+    --icon "assets\app_icon.ico" ^
     --collect-all customtkinter ^
     --exclude-module PIL.AvifImagePlugin ^
     --exclude-module PIL._avif ^
@@ -57,17 +58,17 @@ venv-win7\Scripts\python.exe -m PyInstaller ^
     --specpath . ^
     main.py
 if errorlevel 1 exit /b 1
-echo Build complete: dist-win7\WordToExcelHindiSync.exe
+echo Build complete: dist-win7\TaazaNewsExcelSync.exe
 
 echo === [5/6] Building portable ZIP ===
 if exist portable_staging rmdir /s /q portable_staging
 mkdir portable_staging
-copy /y dist-win7\WordToExcelHindiSync.exe portable_staging\ >nul
+copy /y dist-win7\TaazaNewsExcelSync.exe portable_staging\ >nul
 copy /y README_PORTABLE.txt portable_staging\ >nul 2>nul
-if exist WordToExcelHindiSync_Portable.zip del WordToExcelHindiSync_Portable.zip
-powershell -NoProfile -Command "Compress-Archive -Path 'portable_staging\*' -DestinationPath 'WordToExcelHindiSync_Portable.zip' -CompressionLevel Optimal"
+if exist TaazaNewsExcelSync_Portable.zip del TaazaNewsExcelSync_Portable.zip
+powershell -NoProfile -Command "Compress-Archive -Path 'portable_staging\*' -DestinationPath 'TaazaNewsExcelSync_Portable.zip' -CompressionLevel Optimal"
 rmdir /s /q portable_staging
-echo Portable package: WordToExcelHindiSync_Portable.zip
+echo Portable package: TaazaNewsExcelSync_Portable.zip
 
 echo === [6/6] Building installer (Inno Setup) ===
 if not exist win7_prereqs\vc_redist.x64.exe (
@@ -82,8 +83,8 @@ if errorlevel 1 exit /b 1
 echo.
 echo ============================================================
 echo  BUILD COMPLETE
-echo    EXE:       dist-win7\WordToExcelHindiSync.exe
-echo    Portable:  WordToExcelHindiSync_Portable.zip
-echo    Installer: installer_output_win7\WordToExcelHindiSync_Win7_Setup.exe
+echo    EXE:       dist-win7\TaazaNewsExcelSync.exe
+echo    Portable:  TaazaNewsExcelSync_Portable.zip
+echo    Installer: installer_output_win7\TaazaNewsExcelSync_Win7_Setup.exe
 echo ============================================================
 endlocal

@@ -1,19 +1,19 @@
-"""Data model for a tracked row_XX.txt file record.
+"""Data model for a tracked feed source file.
 
 There is no soft-delete/Status concept here: a record's existence in the
-database IS its existence in the monitored folder (the Excel output is a
-live mirror of the current folder, not a history).
+database IS its source .txt file's existence on disk (each workbook is a
+live mirror of its own .txt file, not a history).
 """
 from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass
-class FileRecord:
+class FeedRecord:
     id: Optional[int]
-    row_number: int
-    category: str
-    file_name: str
+    feed_key: str
+    label: str
+    txt_file: str
     full_path: str
     content: str
     file_hash: str
@@ -25,16 +25,16 @@ class FileRecord:
 
     @property
     def news_lines(self):
-        """The individual Hindi news lines extracted from this file, in order."""
+        """The individual news lines extracted from this file, in order."""
         return self.content.split("\n") if self.content else []
 
     @classmethod
     def from_row(cls, row):
         return cls(
             id=row["id"],
-            row_number=row["row_number"],
-            category=row["category"],
-            file_name=row["file_name"],
+            feed_key=row["feed_key"],
+            label=row["label"],
+            txt_file=row["txt_file"],
             full_path=row["full_path"],
             content=row["content"],
             file_hash=row["file_hash"],

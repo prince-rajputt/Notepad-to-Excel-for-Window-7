@@ -1,26 +1,27 @@
-"""SQLite persistence layer - internal cache of the currently-existing row_XX.txt
-files, keyed by row number.
+"""SQLite persistence layer - internal cache of the currently-existing feed
+source files, keyed by feed key.
 
-There is no soft-delete: when a row_XX.txt file disappears from the folder,
+There is no soft-delete: when a feed's .txt file disappears from the folder,
 its record is removed entirely. The database always reflects exactly the set
-of files currently on disk (used to avoid unnecessary re-parsing of unchanged
-files); the Excel workbook is regenerated from this table as a live mirror.
+of feed files currently on disk (used to avoid unnecessary re-parsing of
+unchanged files); each workbook is regenerated from this table as a live
+mirror of its own feed.
 """
 import logging
 import sqlite3
 import threading
 
-from app.models import FileRecord
+from app.models import FeedRecord
 from app.utils import now_str
 
-logger = logging.getLogger("word_to_excel_sync")
+logger = logging.getLogger("taaza_news_excel_sync")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS files (
+CREATE TABLE IF NOT EXISTS feeds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    row_number INTEGER NOT NULL UNIQUE,
-    category TEXT NOT NULL DEFAULT 'Unassigned',
-    file_name TEXT NOT NULL,
+    feed_key TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL DEFAULT '',
+    txt_file TEXT NOT NULL,
     full_path TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     file_hash TEXT NOT NULL DEFAULT '',
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS files (
     last_synced_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_row_number ON files(row_number);
+CREATE INDEX IF NOT EXISTS idx_feeds_feed_key ON feeds(feed_key);
 """
 
 
@@ -57,114 +58,103 @@ class Database:
 
     # -- queries -----------------------------------------------------------
 
-    def get_by_row_number(self, row_number):
+    def get_by_feed_key(self, feed_key):
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM files WHERE row_number = ?", (row_number,)
+                "SELECT * FROM feeds WHERE feed_key = ?", (feed_key,)
             ).fetchone()
-        return FileRecord.from_row(row) if row else None
+        return FeedRecord.from_row(row) if row else None
 
     def get_all(self):
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM files ORDER BY row_number ASC").fetchall()
-        return [FileRecord.from_row(r) for r in rows]
+            rows = self._conn.execute("SELECT * FROM feeds ORDER BY id ASC").fetchall()
+        return [FeedRecord.from_row(r) for r in rows]
 
-    def get_all_row_numbers(self):
+    def get_all_feed_keys(self):
         with self._lock:
-            rows = self._conn.execute("SELECT row_number FROM files").fetchall()
-        return {r["row_number"] for r in rows}
+            rows = self._conn.execute("SELECT feed_key FROM feeds").fetchall()
+        return {r["feed_key"] for r in rows}
 
     def search(self, query_text):
-        query = "SELECT * FROM files WHERE (category LIKE ? OR file_name LIKE ?) ORDER BY row_number ASC"
+        query = (
+            "SELECT * FROM feeds WHERE (label LIKE ? OR txt_file LIKE ? OR feed_key LIKE ?) "
+            "ORDER BY id ASC"
+        )
         like = f"%{query_text}%"
         with self._lock:
-            rows = self._conn.execute(query, (like, like)).fetchall()
-        return [FileRecord.from_row(r) for r in rows]
+            rows = self._conn.execute(query, (like, like, like)).fetchall()
+        return [FeedRecord.from_row(r) for r in rows]
 
     # -- mutations -----------------------------------------------------------
 
-    def upsert_row(self, row_number, category, file_name, full_path, content, file_hash, size, mtime):
-        """Create a new record for a never-before-seen row number, or update the
-        existing one in place (a file modification)."""
+    def upsert_feed(self, feed_key, label, txt_file, full_path, content, file_hash, size, mtime):
+        """Create a new record for a never-before-seen feed, or update the
+        existing one in place (a source file modification)."""
         timestamp = now_str()
         with self._lock:
             existing = self._conn.execute(
-                "SELECT id FROM files WHERE row_number = ?", (row_number,)
+                "SELECT id FROM feeds WHERE feed_key = ?", (feed_key,)
             ).fetchone()
 
             if existing is None:
                 self._conn.execute(
                     """
-                    INSERT INTO files (
-                        row_number, category, file_name, full_path, content,
+                    INSERT INTO feeds (
+                        feed_key, label, txt_file, full_path, content,
                         file_hash, size, mtime, created_at, modified_at, last_synced_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        row_number, category, file_name, full_path, content,
+                        feed_key, label, txt_file, full_path, content,
                         file_hash, size, mtime, timestamp, timestamp, timestamp,
                     ),
                 )
-                logger.info("New row record: row_number=%s -> %s", row_number, full_path)
+                logger.info("New feed record: %s -> %s", feed_key, full_path)
             else:
                 self._conn.execute(
                     """
-                    UPDATE files
-                    SET category = ?, file_name = ?, full_path = ?, content = ?,
+                    UPDATE feeds
+                    SET label = ?, txt_file = ?, full_path = ?, content = ?,
                         file_hash = ?, size = ?, mtime = ?, modified_at = ?,
                         last_synced_at = ?
-                    WHERE row_number = ?
+                    WHERE feed_key = ?
                     """,
                     (
-                        category, file_name, full_path, content, file_hash, size,
-                        mtime, timestamp, timestamp, row_number,
+                        label, txt_file, full_path, content, file_hash, size,
+                        mtime, timestamp, timestamp, feed_key,
                     ),
                 )
-                logger.info("Updated row record: row_number=%s", row_number)
+                logger.info("Updated feed record: %s", feed_key)
             self._conn.commit()
-        return self.get_by_row_number(row_number)
+        return self.get_by_feed_key(feed_key)
 
-    def touch_last_synced(self, row_number):
+    def touch_last_synced(self, feed_key):
         timestamp = now_str()
         with self._lock:
             self._conn.execute(
-                "UPDATE files SET last_synced_at = ? WHERE row_number = ?",
-                (timestamp, row_number),
+                "UPDATE feeds SET last_synced_at = ? WHERE feed_key = ?",
+                (timestamp, feed_key),
             )
             self._conn.commit()
 
-    def delete_row(self, row_number):
-        """Hard-delete a record - the Excel News Data sheet must not show news
-        for a row_XX.txt file that no longer exists (live-mirror requirement)."""
+    def delete_feed(self, feed_key):
+        """Hard-delete a record - a feed's workbook must not show news for a
+        .txt file that no longer exists (live-mirror requirement)."""
         with self._lock:
-            self._conn.execute("DELETE FROM files WHERE row_number = ?", (row_number,))
+            self._conn.execute("DELETE FROM feeds WHERE feed_key = ?", (feed_key,))
             self._conn.commit()
-        logger.info("Deleted row record: row_number=%s", row_number)
+        logger.info("Deleted feed record: %s", feed_key)
 
-    def update_category(self, row_number, category):
+    def update_label(self, feed_key, label):
         with self._lock:
             self._conn.execute(
-                "UPDATE files SET category = ? WHERE row_number = ?", (category, row_number)
+                "UPDATE feeds SET label = ? WHERE feed_key = ?", (label, feed_key)
             )
-            self._conn.commit()
-
-    def refresh_categories(self, category_lookup):
-        """Bulk-update every record's category from a row_number -> category lookup
-        function. Used when the user edits the Row/Category Mapping in the GUI so
-        existing Excel rows reflect the new names immediately."""
-        with self._lock:
-            rows = self._conn.execute("SELECT row_number FROM files").fetchall()
-            for row in rows:
-                row_number = row["row_number"]
-                category = category_lookup(row_number)
-                self._conn.execute(
-                    "UPDATE files SET category = ? WHERE row_number = ?", (category, row_number)
-                )
             self._conn.commit()
 
     def stats(self):
         with self._lock:
-            rows = self._conn.execute("SELECT content FROM files").fetchall()
+            rows = self._conn.execute("SELECT content FROM feeds").fetchall()
         total_files = len(rows)
         news_items = sum(len(r["content"].split("\n")) if r["content"] else 0 for r in rows)
-        return {"total_files": total_files, "news_items": news_items, "active_categories": total_files}
+        return {"total_files": total_files, "news_items": news_items}

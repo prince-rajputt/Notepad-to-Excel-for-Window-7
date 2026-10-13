@@ -1,36 +1,35 @@
-"""Filesystem scanning helpers - list source files directly inside the root folder."""
+"""Filesystem helpers for locating the configured feed source files.
+
+Deliberately narrow: the app never enumerates a folder looking for work. It
+only ever asks for the exact file names it was configured with, directly
+inside the one root folder. Subfolders and every other .txt file present are
+invisible to it.
+"""
 import logging
 import os
 
-from app.utils import is_supported_file
-
-logger = logging.getLogger("word_to_excel_sync")
+logger = logging.getLogger("taaza_news_excel_sync")
 
 
-def list_target_files(root_folder, extensions):
-    """Return full paths of all real, supported files directly inside root_folder.
+def resolve_feed_paths(root_folder, feeds):
+    """Return {feed_key: full_path} for the configured feeds' source files.
 
-    Deliberately non-recursive: there must be no category subfolders, all
-    source files live directly in the one monitored root folder.
+    Paths are returned whether or not the file exists - the caller decides
+    what a missing source file means (it empties that feed's workbook).
     """
+    return {feed.key: os.path.join(root_folder, feed.txt_file) for feed in feeds}
+
+
+def existing_feed_paths(root_folder, feeds):
+    """Return {feed_key: full_path} for only those source files present on disk."""
     if not os.path.isdir(root_folder):
-        logger.warning("Root folder does not exist: %s", root_folder)
-        return []
-
-    paths = []
-    try:
-        entries = os.listdir(root_folder)
-    except OSError as exc:
-        logger.error("Failed to list folder %s: %s", root_folder, exc)
-        return []
-
-    for entry in entries:
-        full_path = os.path.join(root_folder, entry)
-        if not os.path.isfile(full_path):
-            continue
-        if is_supported_file(entry, extensions):
-            paths.append(full_path)
-    return paths
+        logger.warning("TXT root folder does not exist: %s", root_folder)
+        return {}
+    return {
+        key: path
+        for key, path in resolve_feed_paths(root_folder, feeds).items()
+        if os.path.isfile(path)
+    }
 
 
 def get_file_stat(full_path):

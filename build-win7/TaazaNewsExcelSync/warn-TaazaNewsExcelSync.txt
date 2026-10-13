@@ -14,10 +14,10 @@ Types if import:
 IMPORTANT: Do NOT post this list to the issue-tracker. Use it as a basis for
             tracking down the missing module yourself. Thanks!
 
-missing module named org - imported by copy (optional)
+missing module named 'org.python' - imported by copy (optional), xml.sax (delayed, conditional)
 missing module named _frozen_importlib_external - imported by importlib._bootstrap (delayed), importlib (optional), importlib.abc (optional), zipimport (top-level)
 excluded module named _frozen_importlib - imported by importlib (optional), importlib.abc (optional), zipimport (top-level)
-missing module named 'org.python' - imported by pickle (optional), xml.sax (delayed, conditional)
+missing module named org - imported by pickle (optional)
 missing module named posix - imported by os (conditional, optional), shutil (conditional), importlib._bootstrap_external (conditional)
 missing module named resource - imported by posix (top-level)
 missing module named grp - imported by shutil (optional), tarfile (optional), pathlib (delayed)
@@ -31,7 +31,7 @@ missing module named multiprocessing.get_context - imported by multiprocessing (
 missing module named multiprocessing.TimeoutError - imported by multiprocessing (top-level), multiprocessing.pool (top-level)
 missing module named multiprocessing.set_start_method - imported by multiprocessing (top-level), multiprocessing.spawn (top-level)
 missing module named multiprocessing.get_start_method - imported by multiprocessing (top-level), multiprocessing.spawn (top-level)
-missing module named pyimod02_importers - imported by F:\window 7\wordtoexcel\word_to_excel_sync\venv-win7\Lib\site-packages\PyInstaller\hooks\rthooks\pyi_rth_pkgres.py (delayed), F:\window 7\wordtoexcel\word_to_excel_sync\venv-win7\Lib\site-packages\PyInstaller\hooks\rthooks\pyi_rth_pkgutil.py (delayed)
+missing module named pyimod02_importers - imported by C:\Users\TAAZA14\Desktop\window 7 ( for brekaing news )\wordtoexcel\word_to_excel_sync\venv-win7\Lib\site-packages\PyInstaller\hooks\rthooks\pyi_rth_pkgres.py (delayed), C:\Users\TAAZA14\Desktop\window 7 ( for brekaing news )\wordtoexcel\word_to_excel_sync\venv-win7\Lib\site-packages\PyInstaller\hooks\rthooks\pyi_rth_pkgutil.py (delayed)
 missing module named _manylinux - imported by pkg_resources._vendor.packaging.tags (delayed, optional), packaging._manylinux (delayed, optional)
 missing module named _uuid - imported by uuid (optional)
 missing module named netbios - imported by uuid (delayed)
